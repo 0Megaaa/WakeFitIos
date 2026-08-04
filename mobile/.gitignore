@@ -48,9 +48,13 @@ compile_commands.json
 
 # Credentials
 keystore.properties
+*.keystore
 *.jks
 *.p12
 *.mobileprovision
+
+# Android local environment
+**/local.properties
 
 # Logs
 *.log

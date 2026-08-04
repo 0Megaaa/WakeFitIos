@@ -82,5 +82,5 @@ http://192.168.1.20:8080
 
 - `MemoryStorage` 换成 MMKV 或 SQLite。
 - `MemoryLocalAlarmScheduler` 换成 Android/iOS 本地通知和闹钟调度。
-- iOS 侧接 MediaPipe Pose 或 ML Kit 等效方案。
+- iOS 侧接 MediaPipe Pose 或 ML Kit 等效方案。 iOS 已存在基于 AVFoundation + Apple Vision 的原生姿态识别实现雏形，但尚未完成 Xcode 编译、iPhone 真机和 iPad 真机验证。
 - 完成挑战后接入真实循环声音和震动停止逻辑。
