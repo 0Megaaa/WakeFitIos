@@ -1,0 +1,35 @@
+{
+  "name": "wakefit-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "android:dev": "expo run:android",
+    "prebuild:android": "expo prebuild --platform android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "test": "node --import tsx --test src/**/*.test.ts",
+    "test:core": "node --import tsx --test src/core/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test"
+  },
+  "expo": {
+    "autolinking": {
+      "nativeModulesDir": "modules"
+    }
+  },
+  "dependencies": {
+    "expo": "^57.0.8",
+    "react": "19.2.3",
+    "react-native": "0.86.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/react": "~19.2.4",
+    "tsx": "^4.19.0",
+    "typescript": "~6.0.3"
+  }
+}

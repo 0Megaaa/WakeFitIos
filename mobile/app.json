@@ -1,0 +1,34 @@
+{
+  "expo": {
+    "name": "WakeFit",
+    "slug": "wakefit",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "bundleIdentifier": "com.wakefit.mobile",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "WakeFit uses the camera to count exercise reps for alarm challenges."
+      }
+    },
+    "android": {
+      "package": "com.wakefit.mobile",
+      "permissions": [
+        "CAMERA",
+        "POST_NOTIFICATIONS",
+        "SCHEDULE_EXACT_ALARM",
+        "USE_FULL_SCREEN_INTENT",
+        "VIBRATE",
+        "WAKE_LOCK"
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#f7f3ea"
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}
