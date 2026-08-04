@@ -15,26 +15,25 @@ import {
   View,
 } from 'react-native';
 
-import { createAlarmConfig, updateAlarmConfig, type ExerciseType, type LocalAlarmConfig } from '../features/alarms.ts';
+import { createAlarmConfig, updateAlarmConfig, type ExerciseType, type LocalAlarmConfig } from '../domain/alarm/alarm.ts';
 import {
   FetchWakeFitApiClient,
   type ApiAlarm,
   type ApiWorkoutUpload,
   type CalendarWorkout,
   type StreakSummary,
-} from '../features/api.ts';
-import { shouldRenderInlineCamera, shouldUseCameraFirstChallengeLayout } from '../features/cameraPresentation.ts';
-import { createChallengeFlow, type ChallengeSnapshot } from '../features/challenge.ts';
-import { createDeviceAlarmAlert } from '../features/deviceAlarmAlert.ts';
-import { consumeDevicePendingAlarmLaunch, createDeviceLocalAlarmScheduler } from '../features/deviceLocalAlarm.ts';
-import { ForegroundLocalAlarmScheduler } from '../features/localAlarm.ts';
-import type { LocalAlarmScheduler } from '../features/localAlarm.ts';
-import { NativePoseCameraView } from '../features/nativePoseCamera.tsx';
-import { supportsNativePoseCameraPlatform } from '../features/nativePoseCameraPlatform.ts';
-import { MemoryStorage } from '../features/storage.ts';
-import { createWorkoutSyncQueue } from '../features/syncQueue.ts';
-import { driveOneSimulatedExercise } from '../ui/demoChallenge.ts';
-import type { PoseFrame } from '../core/pushupCounter.ts';
+} from '../infrastructure/api/index.ts';
+import { shouldRenderInlineCamera, shouldUseCameraFirstChallengeLayout } from '../presentation/camera/index.ts';
+import { createChallengeFlow, type ChallengeSnapshot } from '../domain/challenge/challengeFlow.ts';
+import { createDeviceAlarmAlert } from '../platform/alarm/createDeviceAlarmAlert.ts';
+import { consumeDevicePendingAlarmLaunch, createDeviceLocalAlarmScheduler } from '../platform/alarm/createDeviceLocalAlarmScheduler.ts';
+import { ForegroundLocalAlarmScheduler, type LocalAlarmScheduler } from '../platform/alarm/ForegroundLocalAlarmScheduler.ts';
+import { NativePoseCameraView } from '../platform/camera/NativePoseCameraView.tsx';
+import { supportsNativePoseCameraPlatform } from '../platform/camera/nativePoseCameraPlatform.ts';
+import { MemoryStorage } from '../infrastructure/storage/index.ts';
+import { createWorkoutSyncQueue } from '../infrastructure/sync/index.ts';
+import { driveOneSimulatedExercise } from '../debug/simulation/demoChallenge.ts';
+import type { PoseFrame } from '../domain/exercise/types.ts';
 
 type Tab = 'home' | 'alarm' | 'history' | 'backend';
 type ChallengeFlow = ReturnType<typeof createChallengeFlow>;

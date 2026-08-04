@@ -1,11 +1,6 @@
-export type StorageAdapter = {
-  getItem(key: string): Promise<string | null>;
-  setItem(key: string, value: string): Promise<void>;
-  removeItem(key: string): Promise<void>;
-  clear(): Promise<void>;
-};
+import type { Storage } from '../../application/ports/Storage';
 
-export class MemoryStorage implements StorageAdapter {
+export class MemoryStorage implements Storage {
   #items = new Map<string, string>();
 
   async getItem(key: string): Promise<string | null> {

@@ -5,5 +5,5 @@
     "strict": true,
     "types": ["node", "react"]
   },
-  "include": ["App.tsx", "src/**/*.ts", "src/**/*.tsx"]
+  "include": ["App.tsx", "src/**/*.ts", "src/**/*.tsx", "modules/**/*.ts", "modules/**/*.tsx"]
 }

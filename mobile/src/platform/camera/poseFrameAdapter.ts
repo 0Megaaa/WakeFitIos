@@ -1,4 +1,4 @@
-import type { PoseFrame, PoseLandmarkName } from '../core/pushupCounter.ts';
+import type { PoseFrame, PoseLandmarkName } from '../../domain/exercise/types.ts';
 
 export type NativePoseLandmark = {
   name: string;

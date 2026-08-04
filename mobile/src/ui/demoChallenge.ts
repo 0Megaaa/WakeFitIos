@@ -1,6 +1,6 @@
 import type { ChallengeSnapshot, createChallengeFlow } from '../features/challenge.ts';
-import type { ExerciseType } from '../features/alarms.ts';
-import type { PoseFrame, PoseLandmarkName } from '../core/pushupCounter.ts';
+import type { ExerciseType } from '../domain/alarm/alarm.ts';
+import type { PoseFrame, PoseLandmarkName } from '../domain/exercise/types.ts';
 
 type ChallengeFlow = ReturnType<typeof createChallengeFlow>;
 

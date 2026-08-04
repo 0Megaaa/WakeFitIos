@@ -6,7 +6,7 @@ import {
   createPushUpCounter,
   type PoseFrame,
   type PoseLandmarkName,
-} from './pushupCounter.ts';
+} from '../domain/exercise/pushupCounter.ts';
 
 type BodySide = 'left' | 'right';
 

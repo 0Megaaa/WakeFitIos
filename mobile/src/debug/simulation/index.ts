@@ -1,4 +1,3 @@
-export { isDebugToolsEnabled } from '../debugAvailability.ts';
-
-export { driveOneSimulatedExercise, driveOneSimulatedPushUp } from '../../ui/demoChallenge.ts';
-export { createSimulatedPushUpFrames, createSimulatedSquatFrames } from '../../ui/demoChallenge.ts';
+export { isDebugToolsEnabled } from '../debugAvailability.js';
+export { driveOneSimulatedExercise, driveOneSimulatedPushUp } from './demoChallenge.js';
+export { createSimulatedPushUpFrames, createSimulatedSquatFrames } from './demoChallenge.js';

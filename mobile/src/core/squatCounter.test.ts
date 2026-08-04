@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { createSquatCounter, type PoseFrame, type PoseLandmarkName } from './pushupCounter.ts';
+import { createSquatCounter, type PoseFrame, type PoseLandmarkName } from '../domain/exercise/pushupCounter.ts';
 
 type BodySide = 'left' | 'right';
 

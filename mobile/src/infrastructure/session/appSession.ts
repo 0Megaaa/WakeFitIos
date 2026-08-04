@@ -1,5 +1,6 @@
-import type { WakeFitApiClient, StreakSummary, WorkoutCalendar } from './api.ts';
-import type { StorageAdapter } from './storage.ts';
+import type { Storage } from '../../application/ports/Storage.js';
+import type { WakeFitApiClient, StreakSummary, WorkoutCalendar } from '../../application/ports/WakeFitApiClient.js';
+import type { ApiWorkoutUpload } from '../api/types.js';
 
 export type WakeFitSession = {
   token: string;
@@ -7,7 +8,7 @@ export type WakeFitSession = {
 };
 
 export type AppSessionOptions = {
-  storage: StorageAdapter;
+  storage: Storage;
   apiClient: Pick<WakeFitApiClient, 'guestLogin' | 'fetchStreak' | 'fetchCalendar'>;
   deviceId: string;
   tokenKey?: string;

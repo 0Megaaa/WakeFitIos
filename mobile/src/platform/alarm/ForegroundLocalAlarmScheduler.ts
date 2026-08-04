@@ -1,4 +1,4 @@
-import type { ExerciseType } from './alarms.ts';
+import type { ExerciseType } from '../../domain/alarm/alarm.ts';
 
 export type LocalAlarmScheduleRequest = {
   alarmId: string;
@@ -13,6 +13,9 @@ export type LocalAlarmScheduler = {
   schedule(request: LocalAlarmScheduleRequest): Promise<void>;
   cancel(alarmId: string): Promise<void>;
 };
+
+// Alias for compatibility with application ports
+export type AlarmScheduler = LocalAlarmScheduler;
 
 export class MemoryLocalAlarmScheduler implements LocalAlarmScheduler {
   #scheduled = new Map<string, LocalAlarmScheduleRequest>();

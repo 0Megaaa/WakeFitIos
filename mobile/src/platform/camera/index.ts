@@ -1,3 +1,3 @@
-export { NativePoseCameraView } from '../../features/nativePoseCamera.tsx';
-export { supportsNativePoseCameraPlatform } from '../../features/nativePoseCameraPlatform.ts';
-export { nativePoseEventToFrame } from '../../features/poseFrameAdapter.ts';
+export { NativePoseCameraView } from './NativePoseCameraView.tsx';
+export { supportsNativePoseCameraPlatform } from './nativePoseCameraPlatform.ts';
+export { nativePoseEventToFrame, type NativePoseFrameEvent } from './poseFrameAdapter.ts';

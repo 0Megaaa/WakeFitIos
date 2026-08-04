@@ -1,2 +1,2 @@
-export { type Storage } from '../../application/ports/Storage.ts';
-export { MemoryStorage } from '../../features/storage.ts';
+export type { Storage } from '../../application/ports/Storage';
+export { MemoryStorage } from './MemoryStorage';

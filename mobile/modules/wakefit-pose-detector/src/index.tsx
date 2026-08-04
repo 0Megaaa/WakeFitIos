@@ -1,1 +1,1 @@
-export { NativePoseCameraView } from '../../../src/features/nativePoseCamera';
+export { NativePoseCameraView } from '../../../src/platform/camera/NativePoseCameraView';

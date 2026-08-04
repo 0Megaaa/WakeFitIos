@@ -1,4 +1,4 @@
-import type { ExerciseType } from '../../features/alarms.ts';
+import type { ExerciseType } from '../../domain/alarm/alarm.ts';
 
 export type PendingAlarmLaunch = {
   alarmId: string;

@@ -1,7 +1,7 @@
 import { requireNativeModule } from 'expo-modules-core';
 
-import { createMirroredLocalAlarmScheduler, createNativeLocalAlarmScheduler, consumePendingAlarmLaunch, type NativeAlarmLaunch, type NativeAlarmModule } from './nativeAlarm.ts';
-import type { LocalAlarmScheduler } from './localAlarm.ts';
+import { createMirroredLocalAlarmScheduler, createNativeLocalAlarmScheduler, consumePendingAlarmLaunch, type NativeAlarmLaunch, type NativeAlarmModule } from './nativeAlarmBridge.ts';
+import { ForegroundLocalAlarmScheduler, type LocalAlarmScheduleRequest, type LocalAlarmScheduler } from './ForegroundLocalAlarmScheduler.ts';
 
 let cachedWakeFitModule: NativeAlarmModule | null | undefined;
 
@@ -28,3 +28,5 @@ function getWakeFitModule(): NativeAlarmModule | null {
 
   return cachedWakeFitModule;
 }
+
+export { ForegroundLocalAlarmScheduler, type LocalAlarmScheduleRequest, type LocalAlarmScheduler };

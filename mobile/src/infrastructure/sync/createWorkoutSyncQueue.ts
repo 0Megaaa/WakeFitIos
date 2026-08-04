@@ -1,8 +1,10 @@
-import type { ApiWorkoutUpload, WakeFitApiClient, WorkoutUploadResult } from './api.ts';
-import type { StorageAdapter } from './storage.ts';
+import type { Storage } from '../../application/ports/Storage.js';
+import type { WorkoutSyncQueue } from '../../application/ports/WorkoutSyncQueue.js';
+import type { WakeFitApiClient, WorkoutUploadResult } from '../../application/ports/WakeFitApiClient.js';
+import type { ApiWorkoutUpload } from '../api/types.js';
 
 export type WorkoutSyncQueueOptions = {
-  storage: StorageAdapter;
+  storage: Storage;
   apiClient: Pick<WakeFitApiClient, 'uploadWorkout'>;
   storageKey?: string;
 };
@@ -20,7 +22,7 @@ export type FlushWorkoutResult = {
 
 const DEFAULT_STORAGE_KEY = 'wakefit:queued-workouts';
 
-export function createWorkoutSyncQueue(options: WorkoutSyncQueueOptions) {
+export function createWorkoutSyncQueue(options: WorkoutSyncQueueOptions): WorkoutSyncQueue {
   const storageKey = options.storageKey ?? DEFAULT_STORAGE_KEY;
   let operation = Promise.resolve();
 

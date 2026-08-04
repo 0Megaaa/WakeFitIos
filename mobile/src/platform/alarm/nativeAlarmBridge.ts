@@ -1,5 +1,5 @@
-import { DEFAULT_EXERCISE_TYPE, normalizeTargetCount, type ExerciseType } from './alarms.ts';
-import type { LocalAlarmScheduler, LocalAlarmScheduleRequest } from './localAlarm.ts';
+import { DEFAULT_EXERCISE_TYPE, normalizeTargetCount, type ExerciseType } from '../../domain/alarm/alarm.ts';
+import type { LocalAlarmScheduleRequest, LocalAlarmScheduler } from './ForegroundLocalAlarmScheduler.ts';
 
 export type NativeAlarmLaunch = {
   alarmId: string;

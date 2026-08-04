@@ -1,7 +1,7 @@
 import { NativeModules, Platform, Vibration } from 'react-native';
 import { requireNativeModule } from 'expo-modules-core';
 
-import { createAlarmAlertController, type AlarmAlertController } from './alarmAlert.ts';
+import { createAlarmAlertController, type AlarmAlertController } from '../../application/ports/AlarmAlertService.ts';
 
 type WakeFitPoseDetectorModule = {
   startAlarmTone?: () => Promise<void>;

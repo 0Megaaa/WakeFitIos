@@ -1,22 +1,28 @@
-import { MemoryStorage } from '../features/storage.js';
-import { FetchWakeFitApiClient } from '../features/api.js';
-import { createWorkoutSyncQueue } from '../features/syncQueue.js';
-import { createDeviceLocalAlarmScheduler } from '../features/deviceLocalAlarm.js';
-import { createDeviceAlarmAlert } from '../features/deviceAlarmAlert.js';
-import { ForegroundLocalAlarmScheduler } from '../features/localAlarm.js';
+import { MemoryStorage } from '../infrastructure/storage/MemoryStorage.js';
+import { FetchWakeFitApiClient } from '../infrastructure/api/FetchWakeFitApiClient.js';
+import type { FetchWakeFitApiClientOptions } from '../infrastructure/api/FetchWakeFitApiClient.js';
+import { createWorkoutSyncQueue } from '../infrastructure/sync/createWorkoutSyncQueue.js';
+import { createDeviceAlarmAlert } from '../platform/alarm/createDeviceAlarmAlert.js';
+import { ForegroundLocalAlarmScheduler } from '../platform/alarm/ForegroundLocalAlarmScheduler.js';
+import { createDeviceLocalAlarmScheduler } from '../platform/alarm/createDeviceLocalAlarmScheduler.js';
+import type { AlarmScheduler } from '../platform/alarm/ForegroundLocalAlarmScheduler.js';
+import type { AlarmAlertService } from '../application/ports/AlarmAlertService.js';
+import type { Storage } from '../application/ports/Storage.js';
+import type { WakeFitApiClient } from '../application/ports/WakeFitApiClient.js';
+import type { WorkoutSyncQueue } from '../application/ports/WorkoutSyncQueue.js';
 
-interface Dependencies {
-  storage: MemoryStorage;
+export type WakeFitDependencies = {
+  storage: Storage;
   deviceId: string;
-  platformServices: {
-    scheduler: ReturnType<typeof createDeviceLocalAlarmScheduler>;
-    alert: ReturnType<typeof createDeviceAlarmAlert>;
-  };
-}
+  alarmScheduler: AlarmScheduler;
+  alarmAlertService: AlarmAlertService;
+  createApiClient(options: FetchWakeFitApiClientOptions): WakeFitApiClient;
+  createSyncQueue(apiClient: WakeFitApiClient): WorkoutSyncQueue;
+};
 
-let cachedDependencies: Dependencies | null = null;
+let cachedDependencies: WakeFitDependencies | null = null;
 
-export function createWakeFitDependencies(): Dependencies {
+export function createWakeFitDependencies(): WakeFitDependencies {
   if (cachedDependencies) {
     return cachedDependencies;
   }
@@ -30,25 +36,18 @@ export function createWakeFitDependencies(): Dependencies {
     },
   });
 
-  const alertService = createDeviceAlarmAlert();
+  const alarmScheduler = createDeviceLocalAlarmScheduler(foregroundScheduler);
+  const alarmAlertService = createDeviceAlarmAlert();
 
-  const dependencies: Dependencies = {
+  const dependencies: WakeFitDependencies = {
     storage,
     deviceId,
-    platformServices: {
-      scheduler: createDeviceLocalAlarmScheduler(foregroundScheduler),
-      alert: alertService,
-    },
+    alarmScheduler,
+    alarmAlertService,
+    createApiClient: (options) => new FetchWakeFitApiClient(options),
+    createSyncQueue: (apiClient) => createWorkoutSyncQueue({ storage, apiClient }),
   };
 
   cachedDependencies = dependencies;
   return dependencies;
-}
-
-export function createWakeFitApiClient(baseUrl: string, getAuthToken?: () => string | null): FetchWakeFitApiClient {
-  return new FetchWakeFitApiClient({ baseUrl, getAuthToken });
-}
-
-export function createWakeFitSyncQueue(storage: MemoryStorage, apiClient: FetchWakeFitApiClient) {
-  return createWorkoutSyncQueue({ storage, apiClient });
 }

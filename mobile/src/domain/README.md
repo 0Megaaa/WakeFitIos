@@ -1,50 +1,101 @@
 # Domain Layer
 
-纯 TypeScript 业务模型和领域逻辑。
+纯 TypeScript 业务模型层，不依赖任何框架或平台。
 
-## 职责
+## 目录结构
 
-- 业务实体定义 (Alarm, Challenge, Exercise, Workout)
-- 领域逻辑 (Push-up Counter, Squat Classifier)
-- 业务规则验证
-- 跨平台通用类型
+```
+src/domain/
+├── alarm/           # 闹钟配置和校验
+│   ├── alarm.ts     # createAlarmConfig, updateAlarmConfig, normalizeTargetCount
+│   ├── types.ts     # LocalAlarmConfig, CreateAlarmConfigInput, UpdateAlarmConfigInput
+│   └── index.ts
+├── challenge/       # 挑战状态机
+│   ├── challengeFlow.ts  # createChallengeFlow
+│   ├── types.ts    # ChallengeSnapshot, ChallengeFlowOptions, ChallengeStatus
+│   └── index.ts
+├── exercise/        # 动作计数算法
+│   ├── pushupCounter.ts   # createPushUpCounter, calculateAngle
+│   ├── squatPoseClassifier.ts  # classifySquatPoseFrame
+│   ├── types.ts    # PoseFrame, PoseLandmark, ExerciseType
+│   └── index.ts
+├── workout/         # 训练记录
+│   ├── types.ts    # ApiWorkoutUpload, CalendarWorkout, StreakSummary
+│   └── index.ts
+└── index.ts
+```
 
-## 边界
+## 约束
 
-Domain 代码**不得**导入：
+Domain 层严格禁止导入：
+
 - `react`
 - `react-native`
+- `expo`
 - `expo-modules-core`
-- 平台特定实现
-- Infrastructure 实现
-- Platform 实现
-- Presentation 实现
-- Debug 实现
+- `Platform`
+- `src/application/`
+- `src/infrastructure/`
+- `src/platform/`
+- `src/presentation/`
+- `src/debug/`
+- `src/features/`
+- `src/core/`
+- `src/ui/`
 
-## 内容
+## 类型
 
-### alarm/
+### ExerciseType
 
-闹钟业务模型：
-- `alarm.ts`: 闹钟配置创建和更新
+```typescript
+export type ExerciseType = 'push_up' | 'squat';
+```
 
-### exercise/
+### PoseFrame
 
-动作计数器和分类器：
-- `pushupCounter.ts`: 俯卧撑计数器
-- `squatCounter.ts`: 深蹲计数器
-- `squatPoseClassifier.ts`: 深蹲姿态分类
+```typescript
+export type PoseFrame = {
+  timestampMs: number;
+  imageWidth?: number;
+  imageHeight?: number;
+  landmarks: PoseLandmark[];
+};
+```
 
-### challenge/
+### LocalAlarmConfig
 
-挑战流程状态机：
-- `challenge.ts`: 挑战状态流转
+```typescript
+export type LocalAlarmConfig = {
+  id: string;
+  serverId?: number;
+  label: string;
+  timeOfDay: string;
+  timezone: string;
+  enabled: boolean;
+  targetCount: number;
+  exerciseType: ExerciseType;
+  createdAt: string;
+  updatedAt: string;
+};
+```
 
-### workout/
+### ChallengeSnapshot
 
-训练记录相关：
-- 包含在 Challenge 中
+```typescript
+export type ChallengeSnapshot = {
+  status: ChallengeStatus;
+  exerciseType: ExerciseType;
+  targetCount: number;
+  currentCount: number;
+  startedAt: string | null;
+  completedAt: string | null;
+};
+```
 
-## 保持原样
+## 导出
 
-当前 Domain 层代码保留在 `src/core/` 和 `src/features/` 中，通过正式分层目录提供类型重导出和边界定义。
+所有公共类型和函数通过 `src/domain/index.ts` 导出。
+
+## 状态
+
+✅ 真实迁移完成 - Domain 层不依赖 features/core/ui

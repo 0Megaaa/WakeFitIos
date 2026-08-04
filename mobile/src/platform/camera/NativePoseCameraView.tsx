@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { Platform, Text, View, type NativeSyntheticEvent, type StyleProp, type ViewStyle } from 'react-native';
 import { requireNativeViewManager } from 'expo-modules-core';
 
-import type { PoseFrame } from '../core/pushupCounter.ts';
+import type { PoseFrame } from '../../domain/exercise/types.ts';
 import { supportsNativePoseCameraPlatform } from './nativePoseCameraPlatform.ts';
 import { nativePoseEventToFrame, type NativePoseFrameEvent } from './poseFrameAdapter.ts';
 

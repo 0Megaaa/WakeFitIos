@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { createMirroredLocalAlarmScheduler, createNativeLocalAlarmScheduler, consumePendingAlarmLaunch } from './nativeAlarm.ts';
+import { createMirroredLocalAlarmScheduler, createNativeLocalAlarmScheduler, consumePendingAlarmLaunch } from '../platform/alarm/nativeAlarmBridge.ts';
 
 describe('native alarm bridge', () => {
   it('schedules Android alarms with the data needed to start the challenge after launch', async () => {

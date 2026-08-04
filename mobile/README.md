@@ -11,16 +11,36 @@
 
 ## 已实现
 
-### 架构分层
+### 架构分层 (Phase 2 完成)
 
 项目已建立正式双端分层架构：
 
-- **Domain** (`src/domain/`): 纯 TypeScript 业务模型
-- **Application** (`src/application/`): 业务流程接口 (Ports)
-- **Infrastructure** (`src/infrastructure/`): API、Storage、Sync 实现
-- **Platform** (`src/platform/`): 原生平台能力抽象
+- **Domain** (`src/domain/`): 纯 TypeScript 业务模型（真实迁移完成）
+  - `alarm/`: 闹钟配置和校验逻辑
+  - `challenge/`: 挑战状态机
+  - `exercise/`: 俯卧撑和深蹲计数算法
+  - `workout/`: 训练记录类型
+- **Application** (`src/application/`): 业务流程接口 (Ports) 和 Use Cases
+  - `ports/`: AlarmScheduler, Storage, WakeFitApiClient 等接口
+  - `usecases/`: scheduleAlarm, cancelAlarm, recordCompletedWorkout 等
+- **Infrastructure** (`src/infrastructure/`): API、Storage、Sync 实现（真实迁移完成）
+  - `api/`: FetchWakeFitApiClient
+  - `storage/`: MemoryStorage
+  - `session/`: AppSession
+  - `sync/`: WorkoutSyncQueue
+- **Platform** (`src/platform/`): 原生平台能力抽象（真实迁移完成）
+  - `alarm/`: DeviceLocalAlarmScheduler, DeviceAlarmAlert, ForegroundLocalAlarmScheduler
+  - `camera/`: NativePoseCameraView
+  - `permissions/`: PermissionService
+  - `createPlatformServices.ts`: 平台服务工厂
 - **Presentation** (`src/presentation/`): 共享 UI 组件
+  - `screens/`: HomeTab, AlarmTab, HistoryTab, ChallengeModal
+  - `styles/`: wakeFitStyles
+  - `tabs/`: buildWakeFitTabs
+  - `hooks/`: useWakeFitController (开发中)
 - **Debug** (`src/debug/`): 开发调试工具
+  - `simulation/`: demoChallenge 真实迁移完成
+  - `components/`: BackendDebugTab
 
 ### 核心功能
 

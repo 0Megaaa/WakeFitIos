@@ -14,4 +14,6 @@ export type FlushWorkoutResult = {
 export interface WorkoutSyncQueue {
   recordWorkout(workout: ApiWorkoutUpload): Promise<RecordWorkoutResult>;
   flush(): Promise<FlushWorkoutResult>;
+  getQueuedWorkouts(): Promise<ApiWorkoutUpload[]>;
+  clear(): Promise<void>;
 }
