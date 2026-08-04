@@ -1,0 +1,11 @@
+{
+  "platforms": ["android", "ios"],
+  "ios": {
+    "modules": ["WakeFitPoseDetectorModule"],
+    "appDelegateSubscribers": ["WakeFitAlarmNotificationDelegate"],
+    "podspecPath": "ios/WakeFitPoseDetector.podspec"
+  },
+  "android": {
+    "modules": ["com.wakefit.posedetector.WakeFitPoseDetectorModule"]
+  }
+}

@@ -1,0 +1,18 @@
+<lint-module
+    format="1"
+    dir="D:\work\work\xb\alarmclock\mobile\modules\wakefit-pose-detector\android"
+    name=":wakefit-pose-detector"
+    type="LIBRARY"
+    maven="WakeFit:wakefit-pose-detector:unspecified"
+    agpVersion="8.12.0"
+    buildFolder="build"
+    bootClassPath="C:\Users\LENOVO\AppData\Local\Android\Sdk\platforms\android-36\android.jar;C:\Users\LENOVO\AppData\Local\Android\Sdk\build-tools\35.0.0\core-lambda-stubs.jar"
+    javaSourceLevel="17"
+    compileTarget="android-36"
+    neverShrinking="true">
+  <lintOptions
+      absolutePaths="true"
+      checkReleaseBuilds="true"
+      explainIssues="true"/>
+  <variant name="release"/>
+</lint-module>

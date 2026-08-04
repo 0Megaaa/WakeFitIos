@@ -1,0 +1,5 @@
+# ninja log v5
+8	65	0	D:/work/work/xb/alarmclock/mobile/android/app/.cxx/RelWithDebInfo/60h685k1/armeabi-v7a/CMakeFiles/cmake.verify_globs	2a9dbce49eaa227b
+1	3726	8069078788312372	CMakeFiles/appmodules.dir/D_/work/work/xb/alarmclock/mobile/android/app/build/generated/autolinking/src/main/jni/autolinking.cpp.o	4b58d16b04dc7968
+28	4375	8069078794747770	CMakeFiles/appmodules.dir/OnLoad.cpp.o	b2f3c2401ab2b3ff
+4376	4585	8069078796940384	D:/work/work/xb/alarmclock/mobile/android/app/build/intermediates/cxx/RelWithDebInfo/60h685k1/obj/armeabi-v7a/libappmodules.so	4b41267cafc352a7

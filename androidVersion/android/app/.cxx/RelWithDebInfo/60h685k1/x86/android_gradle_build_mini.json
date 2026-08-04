@@ -1,0 +1,31 @@
+{
+  "buildFiles": [
+    "D:\\work\\work\\xb\\alarmclock\\mobile\\node_modules\\react-native\\ReactAndroid\\cmake-utils\\default-app-setup\\CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "C:\\Users\\LENOVO\\AppData\\Local\\Android\\Sdk\\cmake\\3.22.1\\bin\\ninja.exe",
+      "-C",
+      "D:\\work\\work\\xb\\alarmclock\\mobile\\android\\app\\.cxx\\RelWithDebInfo\\60h685k1\\x86",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "C:\\Users\\LENOVO\\AppData\\Local\\Android\\Sdk\\cmake\\3.22.1\\bin\\ninja.exe",
+    "-C",
+    "D:\\work\\work\\xb\\alarmclock\\mobile\\android\\app\\.cxx\\RelWithDebInfo\\60h685k1\\x86",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {
+    "appmodules::@6890427a1f51a3e7e1df": {
+      "artifactName": "appmodules",
+      "abi": "x86",
+      "output": "D:\\work\\work\\xb\\alarmclock\\mobile\\android\\app\\build\\intermediates\\cxx\\RelWithDebInfo\\60h685k1\\obj\\x86\\libappmodules.so",
+      "runtimeFiles": [
+        "C:\\Users\\LENOVO\\.gradle\\caches\\9.3.1\\transforms\\a380509ee370312f3a5187e825a1b544\\workspace\\transformed\\fbjni-0.7.0\\prefab\\modules\\fbjni\\libs\\android.x86\\libfbjni.so",
+        "C:\\Users\\LENOVO\\.gradle\\caches\\9.3.1\\transforms\\eb2224229ff93535bf21ac0d1e319da4\\workspace\\transformed\\react-android-0.86.0-release\\prefab\\modules\\jsi\\libs\\android.x86\\libjsi.so",
+        "C:\\Users\\LENOVO\\.gradle\\caches\\9.3.1\\transforms\\eb2224229ff93535bf21ac0d1e319da4\\workspace\\transformed\\react-android-0.86.0-release\\prefab\\modules\\reactnative\\libs\\android.x86\\libreactnative.so"
+      ]
+    }
+  }
+}

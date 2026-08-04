@@ -1,0 +1,14 @@
+# ninja log v5
+15	139	0	D:/work/work/xb/alarmclock/mobile/android/app/.cxx/Debug/2w5b3z4v/arm64-v8a/CMakeFiles/cmake.verify_globs	13d330f1c4e0dd22
+2	3793	8068434455047095	CMakeFiles/appmodules.dir/D_/work/work/xb/alarmclock/mobile/android/app/build/generated/autolinking/src/main/jni/autolinking.cpp.o	ee2234387f203b9c
+26	4162	8068434458644544	CMakeFiles/appmodules.dir/OnLoad.cpp.o	8cee41a5325e1447
+4163	4335	8068434460456060	D:/work/work/xb/alarmclock/mobile/android/app/build/intermediates/cxx/Debug/2w5b3z4v/obj/arm64-v8a/libappmodules.so	833776f6c300b06b
+8	100	0	D:/work/work/xb/alarmclock/mobile/android/app/.cxx/Debug/2w5b3z4v/arm64-v8a/CMakeFiles/cmake.verify_globs	13d330f1c4e0dd22
+10	60	0	D:/work/work/xb/alarmclock/mobile/android/app/.cxx/Debug/2w5b3z4v/arm64-v8a/CMakeFiles/cmake.verify_globs	13d330f1c4e0dd22
+11	66	0	D:/work/work/xb/alarmclock/mobile/android/app/.cxx/Debug/2w5b3z4v/arm64-v8a/CMakeFiles/cmake.verify_globs	13d330f1c4e0dd22
+16	151	0	D:/work/work/xb/alarmclock/mobile/android/app/.cxx/Debug/2w5b3z4v/arm64-v8a/CMakeFiles/cmake.verify_globs	13d330f1c4e0dd22
+10	97	0	D:/work/work/xb/alarmclock/mobile/android/app/.cxx/Debug/2w5b3z4v/arm64-v8a/CMakeFiles/cmake.verify_globs	13d330f1c4e0dd22
+13	59	0	D:/work/work/xb/alarmclock/mobile/android/app/.cxx/Debug/2w5b3z4v/arm64-v8a/CMakeFiles/cmake.verify_globs	13d330f1c4e0dd22
+7	66	0	D:/work/work/xb/alarmclock/mobile/android/app/.cxx/Debug/2w5b3z4v/arm64-v8a/CMakeFiles/cmake.verify_globs	13d330f1c4e0dd22
+7	65	0	D:/work/work/xb/alarmclock/mobile/android/app/.cxx/Debug/2w5b3z4v/arm64-v8a/CMakeFiles/cmake.verify_globs	13d330f1c4e0dd22
+10	79	0	D:/work/work/xb/alarmclock/mobile/android/app/.cxx/Debug/2w5b3z4v/arm64-v8a/CMakeFiles/cmake.verify_globs	13d330f1c4e0dd22

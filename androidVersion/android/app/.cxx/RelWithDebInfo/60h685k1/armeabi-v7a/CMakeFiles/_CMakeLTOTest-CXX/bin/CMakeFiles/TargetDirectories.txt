@@ -1,0 +1,4 @@
+D:/work/work/xb/alarmclock/mobile/android/app/.cxx/RelWithDebInfo/60h685k1/armeabi-v7a/CMakeFiles/_CMakeLTOTest-CXX/bin/CMakeFiles/foo.dir
+D:/work/work/xb/alarmclock/mobile/android/app/.cxx/RelWithDebInfo/60h685k1/armeabi-v7a/CMakeFiles/_CMakeLTOTest-CXX/bin/CMakeFiles/boo.dir
+D:/work/work/xb/alarmclock/mobile/android/app/.cxx/RelWithDebInfo/60h685k1/armeabi-v7a/CMakeFiles/_CMakeLTOTest-CXX/bin/CMakeFiles/edit_cache.dir
+D:/work/work/xb/alarmclock/mobile/android/app/.cxx/RelWithDebInfo/60h685k1/armeabi-v7a/CMakeFiles/_CMakeLTOTest-CXX/bin/CMakeFiles/rebuild_cache.dir
