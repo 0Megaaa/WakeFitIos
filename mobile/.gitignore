@@ -1,0 +1,56 @@
+# macOS
+.DS_Store
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Expo
+.expo/
+.expo-shared/
+dist/
+web-build/
+
+# Test
+coverage/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Android
+.gradle/
+android/.gradle/
+android/build/
+android/app/build/
+android/app/.cxx/
+android/local.properties
+*.apk
+*.aab
+
+# iOS
+ios/Pods/
+ios/build/
+DerivedData/
+**/xcuserdata/
+*.xcuserstate
+
+# Native build
+.cxx/
+CMakeCache.txt
+.ninja_deps
+.ninja_log
+compile_commands.json
+
+# Credentials
+keystore.properties
+*.jks
+*.p12
+*.mobileprovision
+
+# Logs
+*.log

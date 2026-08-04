@@ -1,5 +1,0 @@
-# ninja log v5
-7	71	0	D:/work/work/xb/alarmclock/mobile/android/app/.cxx/RelWithDebInfo/60h685k1/x86_64/CMakeFiles/cmake.verify_globs	fddf1f228fc4bc8c
-11	3674	8069079037264669	CMakeFiles/appmodules.dir/D_/work/work/xb/alarmclock/mobile/android/app/build/generated/autolinking/src/main/jni/autolinking.cpp.o	6b60c786de6912c2
-2	4370	8069079044156992	CMakeFiles/appmodules.dir/OnLoad.cpp.o	c7a736407430f815
-4371	4586	8069079046397403	D:/work/work/xb/alarmclock/mobile/android/app/build/intermediates/cxx/RelWithDebInfo/60h685k1/obj/x86_64/libappmodules.so	e00820c9fcefe43d

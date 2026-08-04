@@ -1,3 +1,0 @@
-D:/work/work/xb/alarmclock/mobile/android/app/.cxx/Debug/2w5b3z4v/x86/CMakeFiles/appmodules.dir
-D:/work/work/xb/alarmclock/mobile/android/app/.cxx/Debug/2w5b3z4v/x86/CMakeFiles/edit_cache.dir
-D:/work/work/xb/alarmclock/mobile/android/app/.cxx/Debug/2w5b3z4v/x86/CMakeFiles/rebuild_cache.dir
