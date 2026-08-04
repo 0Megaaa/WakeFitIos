@@ -1,26 +1,14 @@
 # Application Layer
 
-## Responsibilities
+Use cases and application services. Depends on domain models and port interfaces.
 
-- Use Cases
-- Application Services
-- Create alarm
-- Update alarm
-- Start challenge
-- Complete challenge
-- Safe exit
-- Save workout
-- Recalculate streak
-- Sync workflow orchestration
+## Contents
 
-## Constraints
+Application services orchestrate domain logic and infrastructure ports.
 
-- Can only depend on:
-  - domain layer
-  - Repository interfaces
-  - Platform Service interfaces
+## Boundaries
 
-- MUST NOT depend on:
-  - SQLite implementation
-  - Fetch implementation
-  - Native module implementation
+Application code MUST NOT import:
+- React or React Native components
+- Platform-specific implementations
+- Infrastructure concrete implementations

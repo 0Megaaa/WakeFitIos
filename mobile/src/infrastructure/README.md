@@ -1,16 +1,14 @@
 # Infrastructure Layer
 
-## Responsibilities
+Concrete implementations of application ports: API clients, storage, sync queue, session management.
 
-- SQLite implementation
-- KeyValue Storage
-- API Client
-- Repository implementations
-- DTOs
-- Serialization
-- Sync Queue
-- Data migration
+## Contents
 
-## Note
+- API implementations
+- Storage adapters
+- Session management
+- Sync queue implementations
 
-This layer is not yet implemented in the current phase.
+## Boundaries
+
+Infrastructure implements application port interfaces.

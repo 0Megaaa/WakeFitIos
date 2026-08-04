@@ -1,78 +1,23 @@
 # Platform Layer
 
-## Responsibilities
+Native platform capabilities abstraction:
+- Alarm scheduling
+- Camera and pose detection
+- Permissions
+- Audio/visual alerts
 
-- Camera abstraction
-- Pose Detection abstraction
-- Alarm Scheduler abstraction
-- Alarm Audio abstraction
-- Permissions abstraction
-- App Lifecycle abstraction
-- Notification abstraction
-- Store Purchase abstraction
-- Android/iOS Adapter
-- Expo Native Module Bridge
+## Platform Differences
 
-## Platform Boundaries
-
-### Android-specific capabilities
-
+### Android
 - AlarmManager
-- BroadcastReceiver
-- Full Screen Intent
-- WakeLock
-- CameraX
-- ML Kit
-- Android Notification Channel
+- CameraX + ML Kit
+- Notification channels
 
-### iOS-specific capabilities
-
+### iOS
 - UserNotifications
-- AVFoundation
-- Vision framework
+- AVFoundation + Vision
 - AVAudioSession
-- iOS App lifecycle
-- iOS permission handling
 
-### Shared capabilities
+## Boundaries
 
-- Alarm domain model
-- Challenge state machine
-- Workout model
-- Streak model
-- Exercise counting business rules
-- API DTOs
-- Sync rules
-- Page structure
-
-## Interface Examples
-
-```typescript
-interface AlarmScheduler {
-  schedule(...): Promise<void>;
-  cancel(...): Promise<void>;
-}
-
-interface AlarmAudioService {
-  start(...): Promise<void>;
-  stop(): Promise<void>;
-}
-
-interface PoseCameraService {
-  isAvailable(): boolean;
-}
-
-interface PermissionService {
-  getCameraStatus(): Promise<PermissionStatus>;
-  requestCamera(): Promise<PermissionStatus>;
-}
-```
-
-## Forbidden
-
-Pages MUST NOT directly call:
-- requireNativeModule
-- requireNativeViewManager
-- NativeModules
-- Kotlin code
-- Swift code
+Platform layer implements application port interfaces using native modules.

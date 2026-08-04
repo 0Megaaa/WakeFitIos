@@ -2,22 +2,73 @@
 
 `mobile/` 是当前前端项目，已补成 Expo / React Native App。
 
+## 开发优先级
+
+1. **iOS** 是当前主要开发目标
+2. React Native / TypeScript 共享代码应尽量同时兼容 Android 和 iOS
+3. Android 与 iOS 平台能力不一致时，优先保证 iOS 后续可开发
+4. Android 当前只要求保留已有功能，不要求新增能力
+
 ## 已实现
 
-- Expo App 入口：`App.tsx`、`index.js`、`app.json`。
-- 首页 Dashboard：连续天数、最长连续天数、上传队列、今日闹钟。
-- 闹钟设置：时间、动作类型、目标次数、启用开关、本地调度适配器。
-- 动作类型：`push_up` 俯卧撑、`squat` 深蹲。
-- 响铃和挑战流程：`idle -> ringing -> challenge -> completed`。
-- 挑战页：通过“模拟一次”按钮驱动真实动作计数状态机。
-- 完成记录：本地记录、连续天数更新、历史列表。
-- 后端连接：填写 API 地址、访客登录、刷新数据、上传离线队列。
-- Android 真实姿态识别：
-  - 本地 Expo Module：`modules/wakefit-pose-detector`
-  - CameraX 打开真机摄像头。
-  - ML Kit Pose Detection 输出 shoulder / elbow / wrist / hip / knee / ankle。
-  - 原生关键点通过 `NativePoseCameraView` 喂给现有动作计数器。
-- 业务层测试：俯卧撑计数、深蹲计数、闹钟配置、挑战流程、API client、同步队列。
+### 架构分层
+
+项目已建立正式双端分层架构：
+
+- **Domain** (`src/domain/`): 纯 TypeScript 业务模型
+- **Application** (`src/application/`): 业务流程接口 (Ports)
+- **Infrastructure** (`src/infrastructure/`): API、Storage、Sync 实现
+- **Platform** (`src/platform/`): 原生平台能力抽象
+- **Presentation** (`src/presentation/`): 共享 UI 组件
+- **Debug** (`src/debug/`): 开发调试工具
+
+### 核心功能
+
+- Expo App 入口：`App.tsx`、`index.js`、`app.json`
+- 首页 Dashboard：连续天数、最长连续天数、上传队列、今日闹钟
+- 闹钟设置：时间、动作类型、目标次数、启用开关、本地调度适配器
+- 动作类型：`push_up` 俯卧撑、`squat` 深蹲
+- 响铃和挑战流程：`idle -> ringing -> challenge -> completed`
+- 挑战页：通过"模拟一次"按钮驱动真实动作计数状态机
+- 完成记录：本地记录、连续天数更新、历史列表
+- 后端连接：填写 API 地址、访客登录、刷新数据、上传离线队列
+- 业务层测试：俯卧撑计数、深蹲计数、闹钟配置、挑战流程、API client、同步队列
+
+### Android 真实姿态识别
+
+- 本地 Expo Module：`modules/wakefit-pose-detector`
+- CameraX 打开真机摄像头
+- ML Kit Pose Detection 输出 shoulder / elbow / wrist / hip / knee / ankle
+- 原生关键点通过 `NativePoseCameraView` 喂给现有动作计数器
+
+### iOS 原生姿态识别
+
+iOS 已存在基于 AVFoundation + Apple Vision 的原生姿态识别实现雏形。
+
+当前工作重点是：
+- 共享业务架构建立
+- iOS Xcode 编译验证
+- iPhone/iPad 真机验证
+- 通知恢复机制
+- 音频和震动集成
+- 姿态识别性能调优
+
+## UI 共享原则
+
+**Android 与 iOS 必须使用同一套 React Native UI。**
+
+- 不允许为 iOS 更换颜色
+- 不允许为 iOS 更换字体
+- 不允许为 iOS 重新布局
+- 不允许使用 Platform.OS 对页面 UI 做两套渲染
+
+平台差异仅限：
+- 系统状态栏
+- Safe Area
+- 系统权限弹窗
+- 原生摄像头 View
+- 原生通知
+- 原生声音和震动
 
 ## 运行
 
@@ -37,20 +88,21 @@ npm run web
 ## 测试
 
 ```bash
-npm test
-npx --no-install tsc --noEmit
+npm run check
 ```
+
+包括 TypeScript 类型检查和所有业务测试。
 
 ## UI 测试路径
 
-1. 打开 App 首页。
-2. 点击“立即测试”。
-3. 点击“开始挑战”。
-4. 需要切换动作时，进入“闹钟”页选择“俯卧撑”或“深蹲”并保存。
-5. Android development build 里点击“真实相机”，对着摄像头做对应动作。
-6. 如果没有 dev build，可以继续点击“模拟一次”，直到达到目标次数。
-7. 查看完成状态和记录页。
-8. 如需联调后端，进入“后端”页，填写后端地址并打开“使用后端同步”。
+1. 打开 App 首页
+2. 点击"立即测试"
+3. 点击"开始挑战"
+4. 需要切换动作时，进入"闹钟"页选择"俯卧撑"或"深蹲"并保存
+5. Android development build 里点击"真实相机"，对着摄像头做对应动作
+6. 如果没有 dev build，可以继续点击"模拟一次"，直到达到目标次数
+7. 查看完成状态和记录页
+8. 如需联调后端，进入"后端"页，填写后端地址并打开"使用后端同步"
 
 ## Android 真实识别运行
 
@@ -78,9 +130,9 @@ http://192.168.1.20:8080
 
 ## 当前边界
 
-当前 UI 是可测 MVP，Android 真实姿态识别代码已经接入；系统级本地通知、循环声音和震动仍待接入。后续需要把：
+当前 UI 是可测 MVP，Android 真实姿态识别代码已经接入。后续需要：
 
-- `MemoryStorage` 换成 MMKV 或 SQLite。
-- `MemoryLocalAlarmScheduler` 换成 Android/iOS 本地通知和闹钟调度。
-- iOS 侧接 MediaPipe Pose 或 ML Kit 等效方案。 iOS 已存在基于 AVFoundation + Apple Vision 的原生姿态识别实现雏形，但尚未完成 Xcode 编译、iPhone 真机和 iPad 真机验证。
-- 完成挑战后接入真实循环声音和震动停止逻辑。
+- `MemoryStorage` 换成 MMKV 或 SQLite（阶段三）
+- `MemoryLocalAlarmScheduler` 换成 Android/iOS 本地通知和闹钟调度（阶段三）
+- 完成 iOS Xcode 编译和真机验证
+- 完成挑战后接入真实循环声音和震动停止逻辑

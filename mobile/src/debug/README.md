@@ -1,16 +1,12 @@
 # Debug Layer
 
-## Responsibilities
-
+Development-only features:
 - Simulated exercise
-- Manual alarm trigger
-- Backend URL debugging
+- Backend debugging
 - Native module diagnostics
-- Test data
-- Development tools
 
-## Requirements
+## Gates
 
-- All debug features MUST be gated by `__DEV__`
-- Release builds MUST NOT display debug buttons or backend debugging pages
-- All future debugging features should be migrated here
+All debug features are controlled by `__DEV__`:
+- Development builds: Debug tools visible
+- Release builds: Debug tools hidden

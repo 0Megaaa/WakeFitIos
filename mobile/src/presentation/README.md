@@ -1,19 +1,16 @@
 # Presentation Layer
 
-## Responsibilities
+React Native UI components, screens, and hooks. Shared between Android and iOS.
 
-- Screen components
+## Contents
+
+- Screens (HomeTab, AlarmTab, HistoryTab, ChallengeModal)
 - Reusable components
-- Navigation
-- Theme definitions
-- UI State management
-- ViewModel
-- User interactions
+- Hooks for state management
+- Styles
 
-## Constraints
+## Principles
 
-- MUST NOT directly call:
-  - SQLite implementation
-  - Fetch implementation
-  - Kotlin code
-  - Swift code
+- All UI components are shared between platforms
+- No platform-specific UI code
+- Platform differences are handled in platform layer
