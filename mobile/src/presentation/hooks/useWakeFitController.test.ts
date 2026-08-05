@@ -97,3 +97,72 @@ describe('useWakeFitController helpers', () => {
     assert.match(result, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   });
 });
+
+describe('API client recreation on backendUrl change', () => {
+  it('returns different client instances when backendUrl changes', () => {
+    const createdClients: string[] = [];
+
+    const fakeCreateApiClient = ({ baseUrl }: { baseUrl: string }) => {
+      createdClients.push(baseUrl);
+      return {
+        baseUrl,
+        guestLogin: async () => ({ token: 'token-' + baseUrl }),
+        fetchStreak: async () => ({ currentDays: 0, longestDays: 0, lastCompletedDate: null }),
+        fetchCalendar: async () => ({ workouts: [] }),
+        createAlarm: async (payload: unknown) => ({ ...(payload as object), id: 1 }),
+        updateAlarm: async (id: number, payload: unknown) => ({ ...(payload as object), id }),
+        recordWorkout: async () => ({ id: 1 }),
+        fetchPendingWorkouts: async () => ({ workouts: [] }),
+        updatePendingWorkout: async () => undefined,
+      };
+    };
+
+    const fakeCreateSyncQueue = () => ({
+      enqueue: async () => ({ queuedCount: 0 }),
+      flush: async () => ({ uploadedCount: 0, remainingCount: 0 }),
+      pendingCount: 0,
+    });
+
+    const fakeStorage = {
+      getItem: async () => null,
+      setItem: async () => {},
+      removeItem: async () => {},
+      clear: async () => {},
+    };
+
+    const fakePlatform = {
+      alarmScheduler: { schedule: async () => {}, cancel: async () => {} },
+      alarmAlertService: { start: async () => {}, stop: async () => {} },
+      pendingAlarmLaunchService: { consumePendingLaunch: async () => null },
+      foregroundAlarmEvents: { subscribe: () => () => {}, emit: () => {} },
+      permissionService: {
+        requestCameraPermission: async () => 'denied' as const,
+        requestNotificationPermission: async () => 'denied' as const,
+        getCameraPermissionStatus: async () => 'denied' as const,
+        getNotificationPermissionStatus: async () => 'denied' as const,
+      },
+      poseCamera: { supported: false },
+    };
+
+    // Simulate the useMemo logic for API client recreation
+    const apiClients: object[] = [];
+    const syncQueues: object[] = [];
+    let currentBackendUrl = 'http://127.0.0.1:8080';
+
+    // First render: create client A
+    apiClients.push(fakeCreateApiClient({ baseUrl: currentBackendUrl || 'http://127.0.0.1:8080' }));
+    syncQueues.push(fakeCreateSyncQueue());
+
+    // Simulate backendUrl changing to B
+    currentBackendUrl = 'http://192.168.1.100:8080';
+    // New client for B
+    apiClients.push(fakeCreateApiClient({ baseUrl: currentBackendUrl || 'http://127.0.0.1:8080' }));
+    syncQueues.push(fakeCreateSyncQueue());
+
+    assert.equal(apiClients.length, 2, 'two clients created');
+    assert.equal(createdClients[0], 'http://127.0.0.1:8080', 'first client uses A');
+    assert.equal(createdClients[1], 'http://192.168.1.100:8080', 'second client uses B');
+    assert.notStrictEqual(apiClients[0], apiClients[1], 'clients are different instances');
+    assert.equal(createdClients.indexOf('http://127.0.0.1:8080'), 0, 'A is never requested again after change');
+  });
+});

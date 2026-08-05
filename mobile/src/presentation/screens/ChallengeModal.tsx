@@ -64,13 +64,11 @@ export function ChallengeModal({ state, actions, isDebugToolsEnabled }: Challeng
                   style={wakeFitStyles.alarmCameraPreview}
                   cameraFacing="front"
                   onPoseFrame={actions.handleRealPoseFrame}
-                  onCameraError={(message) => {
-                    void message;
-                  }}
+                  onCameraError={actions.handleCameraError}
                   fallback={
                     <View style={wakeFitStyles.cameraFallback}>
                       <Text style={wakeFitStyles.emptyTitle}>真实相机未加载</Text>
-                      <Text style={wakeFitStyles.cameraFallbackText}>请使用 Android development build 测试 ML Kit 识别。</Text>
+                      <Text style={wakeFitStyles.cameraFallbackText}>请使用 iOS 或 Android development build 测试真实姿态识别。</Text>
                     </View>
                   }
                 />

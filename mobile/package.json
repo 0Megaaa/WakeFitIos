@@ -11,8 +11,8 @@
     "prebuild:android": "expo prebuild --platform android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "test": "node --import tsx --test src/**/*.test.ts",
-    "test:core": "node --import tsx --test src/core/*.test.ts",
+    "test": "node --import tsx --test src/**/*.test.ts modules/**/*.test.ts",
+    "test:domain": "node --import tsx --test src/domain/**/*.test.ts",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test"
   },

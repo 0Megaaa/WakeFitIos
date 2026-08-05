@@ -1,5 +1,3 @@
-import { createRequire } from 'node:module';
-
 import { supportsNativePoseCameraPlatform } from './camera/nativePoseCameraPlatform.ts';
 import { createPermissionService } from './permissions/createPermissionService.ts';
 import { createForegroundAlarmEvents } from './alarm/createForegroundAlarmEvents.ts';
@@ -9,28 +7,17 @@ import { consumeDevicePendingAlarmLaunch } from './alarm/createDeviceLocalAlarmS
 import { ForegroundLocalAlarmScheduler } from './alarm/ForegroundLocalAlarmScheduler.ts';
 import type { PendingAlarmLaunchService } from '../application/ports/PendingAlarmLaunchService.ts';
 import type { PlatformServices } from './types.ts';
-
-const localRequire = createRequire(typeof __filename === 'string' ? __filename : import.meta.url);
+import type { WakeFitOS } from './runtime/reactNativePlatformRuntime.ts';
 
 export type CreatePlatformServicesOptions = {
-  platformOS?: string;
+  platformOS?: WakeFitOS;
   now?: () => number;
   setTimer?: (callback: () => void, delayMs: number) => NodeJS.Timeout | number;
   clearTimer?: (handle: NodeJS.Timeout | number) => void;
 };
 
 export function createPlatformServices(options: CreatePlatformServicesOptions = {}): PlatformServices {
-  let platformOS = options.platformOS;
-  if (platformOS === undefined) {
-    // Defer the react-native import to runtime so this module can be loaded
-    // by Node.js test runners without bundlers.
-    try {
-      const { Platform } = localRequire('react-native');
-      platformOS = Platform.OS;
-    } catch {
-      platformOS = 'unknown';
-    }
-  }
+  const platformOS = options.platformOS ?? 'unknown';
 
   const foregroundAlarmEvents = createForegroundAlarmEvents();
   const foregroundScheduler = new ForegroundLocalAlarmScheduler({
@@ -73,9 +60,9 @@ export function createPlatformServices(options: CreatePlatformServicesOptions = 
     alarmAlertService,
     pendingAlarmLaunchService,
     foregroundAlarmEvents,
-    permissionService: createPermissionService(),
+    permissionService: createPermissionService({ platformOS }),
     poseCamera: {
-      supported: supportsNativePoseCameraPlatform(platformOS ?? 'unknown'),
+      supported: supportsNativePoseCameraPlatform(platformOS),
     },
   };
 }

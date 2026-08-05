@@ -36,8 +36,7 @@
 - **Presentation** (`src/presentation/`): 共享 UI 组件
   - `screens/`: HomeTab, AlarmTab, HistoryTab, ChallengeModal
   - `styles/`: wakeFitStyles
-  - `tabs/`: buildWakeFitTabs
-  - `hooks/`: useWakeFitController (开发中)
+  - `hooks/`: useWakeFitController (已完成)
 - **Debug** (`src/debug/`): 开发调试工具
   - `simulation/`: demoChallenge 真实迁移完成
   - `components/`: BackendDebugTab
@@ -148,11 +147,19 @@ cd android
 http://192.168.1.20:8080
 ```
 
-## 当前边界
+## 当前状态
 
-当前 UI 是可测 MVP，Android 真实姿态识别代码已经接入。后续需要：
+### 移动端存储
+当前使用 `MemoryStorage`，内存存储仅在 App 会话期间保持，关闭后数据丢失。
 
-- `MemoryStorage` 换成 MMKV 或 SQLite（阶段三）
-- `MemoryLocalAlarmScheduler` 换成 Android/iOS 本地通知和闹钟调度（阶段三）
-- 完成 iOS Xcode 编译和真机验证
-- 完成挑战后接入真实循环声音和震动停止逻辑
+### 移动端持久化计划
+下一阶段先进行 iOS 真机体验验证，后续移动端持久化**不使用 SQLite**，具体方案待定。
+
+### 服务端
+服务端未来使用 MySQL，**移动端不直接连接 MySQL**，所有数据通过 REST API 同步。
+
+### useWakeFitController
+`useWakeFitController` 已完成开发并接入，用于统一管理 WakeFit 状态和业务逻辑。
+
+### Phase 2 完成后的下一步
+Phase 2 完成后仍需 **Xcode 真机验证**，确认 iOS 原生模块编译通过。

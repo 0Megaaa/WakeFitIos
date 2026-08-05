@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, type AppStateStatus, Platform } from 'react-native';
+import { AppState, type AppStateStatus } from 'react-native';
 
 import type { WakeFitDependencies } from '../../app/types.ts';
 import type { ExerciseType, LocalAlarmConfig } from '../../domain/alarm/alarm.ts';
@@ -68,6 +68,7 @@ export type WakeFitControllerActions = {
   simulateOnePushUp: () => void;
   toggleRealCamera: () => Promise<void>;
   handleRealPoseFrame: (frame: PoseFrame) => void;
+  handleCameraError: (message: string) => void;
   resetChallenge: () => void;
   closeCompletedAlarm: () => void;
   loginBackend: () => Promise<void>;
@@ -226,8 +227,6 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
     createSyncQueue,
   } = dependencies;
 
-  const apiClientRef = useRef<WakeFitApiClient | null>(null);
-  const syncQueueRef = useRef<WorkoutSyncQueue | null>(null);
   const tokenRef = useRef<string | null>(null);
   const recordedWorkoutIDs = useRef(new Set<string>());
   const consumedAlarmLaunches = useRef(new Set<string>());
@@ -264,23 +263,17 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
 
   alarmRef.current = alarm;
 
+  // Recreate API Client when backendUrl changes - no stale caching.
   const apiClient = useMemo<WakeFitApiClient>(() => {
-    if (apiClientRef.current) {
-      return apiClientRef.current;
-    }
-    apiClientRef.current = createApiClient({
+    return createApiClient({
       baseUrl: normalizeBackendUrl(backendUrl) || 'http://127.0.0.1:8080',
       getAuthToken: () => tokenRef.current,
     });
-    return apiClientRef.current;
   }, [backendUrl, createApiClient]);
 
+  // Recreate Sync Queue when apiClient changes.
   const syncQueue = useMemo<WorkoutSyncQueue>(() => {
-    if (syncQueueRef.current) {
-      return syncQueueRef.current;
-    }
-    syncQueueRef.current = createSyncQueue(apiClient);
-    return syncQueueRef.current;
+    return createSyncQueue(apiClient);
   }, [apiClient, createSyncQueue]);
 
   const startAlarmFlow = useCallback(
@@ -551,12 +544,12 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
     }
 
     if (!platform.poseCamera.supported) {
-      setStatus('真实识别当前先接 Android development build');
+      setStatus('请使用 iOS 或 Android development build 测试真实姿态识别');
       return;
     }
 
-    const status = await platform.permissionService.requestCameraPermission();
-    if (status !== 'granted') {
+    const permissionStatus = await platform.permissionService.requestCameraPermission();
+    if (permissionStatus !== 'granted') {
       setStatus('没有摄像头权限，无法开启真实识别');
       return;
     }
@@ -582,6 +575,10 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
       void recordCompletedWorkoutHandler(nextSnapshot.workout);
     }
   }, [flow, recordCompletedWorkoutHandler]);
+
+  const handleCameraError = useCallback((message: string) => {
+    setStatus(`真实识别错误：${message}`);
+  }, []);
 
   const resetChallenge = useCallback(() => {
     flow?.reset();
@@ -654,11 +651,8 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
     }
   }, [ensureGuestSession, refreshDashboard, syncQueue]);
 
-  // Touch storage reference so callers see the dependency is intentional.
+  // storage is used by the sync queue through dependencies.storage
   void storage;
-
-  // Touch Platform so callers see the dependency is intentional.
-  void Platform;
 
   const state: WakeFitControllerState = {
     tab,
@@ -695,6 +689,7 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
     simulateOnePushUp,
     toggleRealCamera,
     handleRealPoseFrame,
+    handleCameraError,
     resetChallenge,
     closeCompletedAlarm,
     loginBackend,
