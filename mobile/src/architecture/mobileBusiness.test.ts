@@ -4,7 +4,7 @@ import { describe, it } from 'node:test';
 import { createAlarmConfig, updateAlarmConfig } from '../domain/alarm/alarm.ts';
 import { FetchWakeFitApiClient, MemoryStorage } from '../infrastructure/index.js';
 import { createAppSession, createWorkoutSyncQueue } from '../infrastructure/index.js';
-import { createChallengeFlow } from './challenge.ts';
+import { createChallengeFlow } from '../domain/challenge/challengeFlow.ts';
 import { ForegroundLocalAlarmScheduler, MemoryLocalAlarmScheduler } from '../platform/alarm/ForegroundLocalAlarmScheduler.ts';
 import type { ApiAlarm, ApiWorkoutUpload } from '../infrastructure/api/index.js';
 import type { PoseFrame, PoseLandmarkName } from '../domain/exercise/types.ts';

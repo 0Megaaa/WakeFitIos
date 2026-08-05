@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { createAlarmAlertController } from '../application/ports/AlarmAlertService.ts';
+import { createAlarmAlertController } from './AlarmAlertService.ts';
 
 describe('alarm alert controller', () => {
   it('starts native tone, vibration, and fallback sound loop once', async () => {

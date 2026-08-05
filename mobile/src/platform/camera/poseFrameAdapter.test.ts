@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { nativePoseEventToFrame } from '../platform/camera/poseFrameAdapter.ts';
+import { nativePoseEventToFrame } from './poseFrameAdapter.ts';
 
 describe('native pose frame adapter', () => {
   it('converts native camera landmarks into the shared PoseFrame shape', () => {

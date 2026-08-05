@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { supportsNativePoseCameraPlatform } from '../platform/camera/nativePoseCameraPlatform.ts';
+import { supportsNativePoseCameraPlatform } from './nativePoseCameraPlatform.ts';
 
 describe('native pose camera platform support', () => {
   it('uses the native pose camera on Android and iOS development builds', () => {

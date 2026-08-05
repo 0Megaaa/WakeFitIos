@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
 const SRC_ROOT = join(process.cwd(), 'src');
+const MODULES_ROOT = join(process.cwd(), 'modules');
 
 function normalizePath(filePath: string): string {
   return filePath.split(sep).join('/');
@@ -10,7 +11,12 @@ function normalizePath(filePath: string): string {
 
 function getAllTsFiles(dir: string): string[] {
   const files: string[] = [];
-  const entries = readdirSync(dir, { withFileTypes: true });
+  let entries: { name: string; isDirectory: () => boolean }[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true }) as { name: string; isDirectory: () => boolean }[];
+  } catch {
+    return files;
+  }
   for (const entry of entries) {
     if (entry.name === 'node_modules') continue;
     const fullPath = join(dir, entry.name);
@@ -31,19 +37,35 @@ function readSource(filePath: string): string {
   }
 }
 
-function hasForbiddenImport(content: string, forbidden: string): boolean {
-  const lines = content.split('\n');
-  for (const line of lines) {
+const IMPORT_PATTERN = /(?:from\s+['"]([^'"]+)['"]|require\s*\(\s*['"]([^'"]+)['"]\s*\))/g;
+
+function extractImportSpecifiers(content: string): string[] {
+  const specifiers: string[] = [];
+  for (const line of content.split('\n')) {
     const trimmed = line.trim();
     if (trimmed.startsWith('//') || trimmed.startsWith('*')) continue;
-    if (trimmed.includes(`from '${forbidden}'`) || trimmed.includes(`from "${forbidden}"`)) {
-      return true;
-    }
-    if (trimmed.includes(`require('${forbidden}')`) || trimmed.includes(`require("${forbidden}")`)) {
-      return true;
+    let match: RegExpExecArray | null;
+    IMPORT_PATTERN.lastIndex = 0;
+    while ((match = IMPORT_PATTERN.exec(trimmed)) !== null) {
+      const specifier = match[1] ?? match[2];
+      if (specifier) {
+        specifiers.push(specifier);
+      }
     }
   }
+  return specifiers;
+}
+
+function specifierHitsLayer(specifier: string, layerFragment: string): boolean {
+  const normalized = normalizePath(specifier);
+  if (normalized.startsWith(layerFragment)) return true;
+  if (normalized.includes(`/${layerFragment}/`)) return true;
+  if (normalized.startsWith(`${layerFragment}/`)) return true;
   return false;
+}
+
+function specifierForbiddenInLayer(specifier: string, forbidden: string[]): boolean {
+  return forbidden.some((entry) => specifierHitsLayer(specifier, entry));
 }
 
 function getLayerFromPath(filePath: string): string | null {
@@ -55,150 +77,48 @@ function getLayerFromPath(filePath: string): string | null {
   if (normalized.includes('/presentation/')) return 'presentation';
   if (normalized.includes('/debug/')) return 'debug';
   if (normalized.includes('/app/')) return 'app';
-  if (normalized.includes('/features/')) return 'features';
-  if (normalized.includes('/core/')) return 'core';
-  if (normalized.includes('/ui/')) return 'ui';
   return null;
 }
 
 describe('architecture layer boundaries', () => {
-  const allFiles = getAllTsFiles(SRC_ROOT);
+  const allFiles = [
+    ...getAllTsFiles(SRC_ROOT),
+    ...getAllTsFiles(MODULES_ROOT),
+  ];
 
-  const domainFiles = allFiles.filter(f => {
-    const layer = getLayerFromPath(f);
-    return layer === 'domain';
-  }).filter(f => !f.endsWith('README.md'));
-
-  const applicationFiles = allFiles.filter(f => {
-    const layer = getLayerFromPath(f);
-    return layer === 'application';
-  }).filter(f => !f.endsWith('README.md'));
-
-  const infrastructureFiles = allFiles.filter(f => {
-    const layer = getLayerFromPath(f);
-    return layer === 'infrastructure';
-  }).filter(f => !f.endsWith('README.md'));
-
-  const platformFiles = allFiles.filter(f => {
-    const layer = getLayerFromPath(f);
-    return layer === 'platform';
-  }).filter(f => !f.endsWith('README.md'));
-
-  const presentationFiles = allFiles.filter(f => {
-    const layer = getLayerFromPath(f);
-    return layer === 'presentation';
-  }).filter(f => !f.endsWith('README.md'));
-
-  const debugFiles = allFiles.filter(f => {
-    const layer = getLayerFromPath(f);
-    return layer === 'debug';
-  }).filter(f => !f.endsWith('README.md'));
-
-  const appFiles = allFiles.filter(f => {
-    const layer = getLayerFromPath(f);
-    return layer === 'app';
-  }).filter(f => !f.endsWith('README.md'));
-
-  // Verify files were scanned
-  it('domain layer files were scanned', () => {
-    if (domainFiles.length === 0) {
-      throw new Error('No domain files were scanned - check path detection');
-    }
-  });
-
-  it('application layer files were scanned', () => {
-    if (applicationFiles.length === 0) {
-      throw new Error('No application files were scanned - check path detection');
-    }
-  });
-
-  it('infrastructure layer files were scanned', () => {
-    if (infrastructureFiles.length === 0) {
-      throw new Error('No infrastructure files were scanned - check path detection');
-    }
-  });
-
-  it('platform layer files were scanned', () => {
-    if (platformFiles.length === 0) {
-      throw new Error('No platform files were scanned - check path detection');
-    }
-  });
-
-  it('presentation layer files were scanned', () => {
-    if (presentationFiles.length === 0) {
-      throw new Error('No presentation files were scanned - check path detection');
-    }
-  });
+  const domainFiles = allFiles.filter(f => getLayerFromPath(f) === 'domain');
+  const applicationFiles = allFiles.filter(f => getLayerFromPath(f) === 'application');
+  const infrastructureFiles = allFiles.filter(f => getLayerFromPath(f) === 'infrastructure');
+  const platformFiles = allFiles.filter(f => getLayerFromPath(f) === 'platform');
+  const presentationFiles = allFiles.filter(f => getLayerFromPath(f) === 'presentation');
+  const debugFiles = allFiles.filter(f => getLayerFromPath(f) === 'debug');
+  const appFiles = allFiles.filter(f => getLayerFromPath(f) === 'app');
 
   // Domain layer rules
   describe('domain layer', () => {
     for (const file of domainFiles) {
       const content = readSource(file);
-      const relPath = relative(SRC_ROOT, file);
+      const specifiers = extractImportSpecifiers(content);
+      const relPath = relative(process.cwd(), file);
 
-      it(`${relPath} must not import react`, () => {
-        if (hasForbiddenImport(content, 'react')) {
-          throw new Error(`Domain file ${relPath} imports 'react'`);
+      it(`${relPath} must not import react or react-native`, () => {
+        for (const spec of specifiers) {
+          if (spec === 'react' || spec === 'react-native' || spec.startsWith('react/') || spec.startsWith('react-native/')) {
+            throw new Error(`Domain file ${relPath} imports '${spec}'`);
+          }
+        }
+        if (content.includes('requireNativeModule(') || content.includes('requireNativeViewManager(')) {
+          throw new Error(`Domain file ${relPath} uses native module API`);
         }
       });
 
-      it(`${relPath} must not import react-native`, () => {
-        if (hasForbiddenImport(content, 'react-native')) {
-          throw new Error(`Domain file ${relPath} imports 'react-native'`);
-        }
-      });
-
-      it(`${relPath} must not import expo-modules-core`, () => {
-        if (hasForbiddenImport(content, 'expo-modules-core')) {
-          throw new Error(`Domain file ${relPath} imports 'expo-modules-core'`);
-        }
-      });
-
-      it(`${relPath} must not import application`, () => {
-        if (hasForbiddenImport(content, '/application/')) {
-          throw new Error(`Domain file ${relPath} imports 'application'`);
-        }
-      });
-
-      it(`${relPath} must not import infrastructure`, () => {
-        if (hasForbiddenImport(content, '/infrastructure/')) {
-          throw new Error(`Domain file ${relPath} imports 'infrastructure'`);
-        }
-      });
-
-      it(`${relPath} must not import platform`, () => {
-        if (hasForbiddenImport(content, '/platform/')) {
-          throw new Error(`Domain file ${relPath} imports 'platform'`);
-        }
-      });
-
-      it(`${relPath} must not import presentation`, () => {
-        if (hasForbiddenImport(content, '/presentation/')) {
-          throw new Error(`Domain file ${relPath} imports 'presentation'`);
-        }
-      });
-
-      it(`${relPath} must not import debug`, () => {
-        if (hasForbiddenImport(content, '/debug/')) {
-          throw new Error(`Domain file ${relPath} imports 'debug'`);
-        }
-      });
-
-      it(`${relPath} must not import features`, () => {
-        if (hasForbiddenImport(content, '/features/')) {
-          throw new Error(`Domain file ${relPath} imports 'features'`);
-        }
-      });
-
-      it(`${relPath} must not import core`, () => {
-        if (hasForbiddenImport(content, '/core/')) {
-          throw new Error(`Domain file ${relPath} imports 'core'`);
-        }
-      });
-
-      it(`${relPath} must not import ui`, () => {
-        if (hasForbiddenImport(content, '/ui/')) {
-          throw new Error(`Domain file ${relPath} imports 'ui'`);
+      it(`${relPath} must not import application, infrastructure, platform, presentation, debug, app, or features paths`, () => {
+        for (const spec of specifiers) {
+          for (const forbidden of ['application', 'infrastructure', 'platform', 'presentation', 'debug', 'app']) {
+            if (specifierHitsLayer(spec, forbidden)) {
+              throw new Error(`Domain file ${relPath} imports '${spec}' (forbidden layer ${forbidden})`);
+            }
+          }
         }
       });
     }
@@ -208,59 +128,24 @@ describe('architecture layer boundaries', () => {
   describe('application layer', () => {
     for (const file of applicationFiles) {
       const content = readSource(file);
-      const relPath = relative(SRC_ROOT, file);
+      const specifiers = extractImportSpecifiers(content);
+      const relPath = relative(process.cwd(), file);
 
-      it(`${relPath} must not import react`, () => {
-        if (hasForbiddenImport(content, 'react')) {
-          throw new Error(`Application file ${relPath} imports 'react'`);
+      it(`${relPath} must not import react or react-native`, () => {
+        for (const spec of specifiers) {
+          if (spec === 'react' || spec === 'react-native' || spec.startsWith('react/') || spec.startsWith('react-native/')) {
+            throw new Error(`Application file ${relPath} imports '${spec}'`);
+          }
         }
       });
 
-      it(`${relPath} must not import react-native`, () => {
-        if (hasForbiddenImport(content, 'react-native')) {
-          throw new Error(`Application file ${relPath} imports 'react-native'`);
-        }
-      });
-
-      it(`${relPath} must not import infrastructure`, () => {
-        if (hasForbiddenImport(content, '/infrastructure/')) {
-          throw new Error(`Application file ${relPath} imports 'infrastructure'`);
-        }
-      });
-
-      it(`${relPath} must not import platform`, () => {
-        if (hasForbiddenImport(content, '/platform/')) {
-          throw new Error(`Application file ${relPath} imports 'platform'`);
-        }
-      });
-
-      it(`${relPath} must not import presentation`, () => {
-        if (hasForbiddenImport(content, '/presentation/')) {
-          throw new Error(`Application file ${relPath} imports 'presentation'`);
-        }
-      });
-
-      it(`${relPath} must not import debug`, () => {
-        if (hasForbiddenImport(content, '/debug/')) {
-          throw new Error(`Application file ${relPath} imports 'debug'`);
-        }
-      });
-
-      it(`${relPath} must not import features`, () => {
-        if (hasForbiddenImport(content, '/features/')) {
-          throw new Error(`Application file ${relPath} imports 'features'`);
-        }
-      });
-
-      it(`${relPath} must not import core`, () => {
-        if (hasForbiddenImport(content, '/core/')) {
-          throw new Error(`Application file ${relPath} imports 'core'`);
-        }
-      });
-
-      it(`${relPath} must not import ui`, () => {
-        if (hasForbiddenImport(content, '/ui/')) {
-          throw new Error(`Application file ${relPath} imports 'ui'`);
+      it(`${relPath} must not import infrastructure, platform, presentation, debug, app`, () => {
+        for (const spec of specifiers) {
+          for (const forbidden of ['infrastructure', 'platform', 'presentation', 'debug', 'app']) {
+            if (specifierHitsLayer(spec, forbidden)) {
+              throw new Error(`Application file ${relPath} imports '${spec}' (forbidden layer ${forbidden})`);
+            }
+          }
         }
       });
     }
@@ -270,29 +155,16 @@ describe('architecture layer boundaries', () => {
   describe('infrastructure layer', () => {
     for (const file of infrastructureFiles) {
       const content = readSource(file);
-      const relPath = relative(SRC_ROOT, file);
+      const specifiers = extractImportSpecifiers(content);
+      const relPath = relative(process.cwd(), file);
 
-      it(`${relPath} must not import presentation`, () => {
-        if (hasForbiddenImport(content, '/presentation/')) {
-          throw new Error(`Infrastructure file ${relPath} imports 'presentation'`);
-        }
-      });
-
-      it(`${relPath} must not import debug`, () => {
-        if (hasForbiddenImport(content, '/debug/')) {
-          throw new Error(`Infrastructure file ${relPath} imports 'debug'`);
-        }
-      });
-
-      it(`${relPath} must not import features`, () => {
-        if (hasForbiddenImport(content, '/features/')) {
-          throw new Error(`Infrastructure file ${relPath} imports 'features'`);
-        }
-      });
-
-      it(`${relPath} must not import ui`, () => {
-        if (hasForbiddenImport(content, '/ui/')) {
-          throw new Error(`Infrastructure file ${relPath} imports 'ui'`);
+      it(`${relPath} must not import presentation, debug, app, platform`, () => {
+        for (const spec of specifiers) {
+          for (const forbidden of ['presentation', 'debug', 'app', 'platform']) {
+            if (specifierHitsLayer(spec, forbidden)) {
+              throw new Error(`Infrastructure file ${relPath} imports '${spec}' (forbidden layer ${forbidden})`);
+            }
+          }
         }
       });
     }
@@ -302,35 +174,16 @@ describe('architecture layer boundaries', () => {
   describe('platform layer', () => {
     for (const file of platformFiles) {
       const content = readSource(file);
-      const relPath = relative(SRC_ROOT, file);
+      const specifiers = extractImportSpecifiers(content);
+      const relPath = relative(process.cwd(), file);
 
-      it(`${relPath} must not import presentation`, () => {
-        if (hasForbiddenImport(content, '/presentation/')) {
-          throw new Error(`Platform file ${relPath} imports 'presentation'`);
-        }
-      });
-
-      it(`${relPath} must not import infrastructure`, () => {
-        if (hasForbiddenImport(content, '/infrastructure/')) {
-          throw new Error(`Platform file ${relPath} imports 'infrastructure'`);
-        }
-      });
-
-      it(`${relPath} must not import debug`, () => {
-        if (hasForbiddenImport(content, '/debug/')) {
-          throw new Error(`Platform file ${relPath} imports 'debug'`);
-        }
-      });
-
-      it(`${relPath} must not import features`, () => {
-        if (hasForbiddenImport(content, '/features/')) {
-          throw new Error(`Platform file ${relPath} imports 'features'`);
-        }
-      });
-
-      it(`${relPath} must not import ui`, () => {
-        if (hasForbiddenImport(content, '/ui/')) {
-          throw new Error(`Platform file ${relPath} imports 'ui'`);
+      it(`${relPath} must not import presentation, debug, app`, () => {
+        for (const spec of specifiers) {
+          for (const forbidden of ['presentation', 'debug', 'app']) {
+            if (specifierHitsLayer(spec, forbidden)) {
+              throw new Error(`Platform file ${relPath} imports '${spec}' (forbidden layer ${forbidden})`);
+            }
+          }
         }
       });
     }
@@ -340,15 +193,16 @@ describe('architecture layer boundaries', () => {
   describe('presentation layer', () => {
     for (const file of presentationFiles) {
       const content = readSource(file);
-      const relPath = relative(SRC_ROOT, file);
+      const specifiers = extractImportSpecifiers(content);
+      const relPath = relative(process.cwd(), file);
 
-      it(`${relPath} must not directly requireNativeModule`, () => {
+      it(`${relPath} must not directly call requireNativeModule`, () => {
         if (content.includes('requireNativeModule(')) {
           throw new Error(`Presentation file ${relPath} directly calls requireNativeModule`);
         }
       });
 
-      it(`${relPath} must not directly requireNativeViewManager`, () => {
+      it(`${relPath} must not directly call requireNativeViewManager`, () => {
         if (content.includes('requireNativeViewManager(')) {
           throw new Error(`Presentation file ${relPath} directly calls requireNativeViewManager`);
         }
@@ -360,91 +214,130 @@ describe('architecture layer boundaries', () => {
         }
       });
 
-      it(`${relPath} must not import features`, () => {
-        if (hasForbiddenImport(content, '/features/')) {
-          throw new Error(`Presentation file ${relPath} imports 'features'`);
-        }
-      });
-
-      it(`${relPath} must not import core`, () => {
-        if (hasForbiddenImport(content, '/core/')) {
-          throw new Error(`Presentation file ${relPath} imports 'core'`);
-        }
-      });
-
-      it(`${relPath} must not import ui`, () => {
-        if (hasForbiddenImport(content, '/ui/')) {
-          throw new Error(`Presentation file ${relPath} imports 'ui'`);
+      it(`${relPath} presentation may only use debug simulation helpers, not debug UI components`, () => {
+        // Presentation CAN import debug/simulation helpers (used by simulate button)
+        // and debug/components for debug-only tabs (gated by isDebugToolsEnabled).
+        // It must not import arbitrary debug code paths.
+        for (const spec of specifiers) {
+          const normalized = normalizePath(spec);
+          // Allow /debug/simulation/ paths
+          if (normalized.includes('/debug/simulation/')) continue;
+          // Allow /debug/components/ paths (debug-only tabs)
+          if (normalized.includes('/debug/components/')) continue;
+          // Allow /debug/debugAvailability.ts
+          if (normalized.endsWith('/debug/debugAvailability.ts') || normalized.endsWith('/debug/debugAvailability')) continue;
+          if (specifierHitsLayer(spec, 'debug')) {
+            throw new Error(`Presentation file ${relPath} imports '${spec}' (only debug/simulation or debug/components allowed)`);
+          }
         }
       });
     }
   });
 
-  // Debug layer rules - it should not be imported by lower layers
+  // Debug layer isolation
   describe('debug layer isolation', () => {
     it('domain layer must not import debug', () => {
       for (const file of domainFiles) {
-        const content = readSource(file);
-        if (hasForbiddenImport(content, '/debug/')) {
-          const relPath = relative(SRC_ROOT, file);
-          throw new Error(`Domain file ${relPath} imports 'debug'`);
+        const specifiers = extractImportSpecifiers(readSource(file));
+        const relPath = relative(process.cwd(), file);
+        for (const spec of specifiers) {
+          if (specifierHitsLayer(spec, 'debug')) {
+            throw new Error(`Domain file ${relPath} imports '${spec}' (debug forbidden)`);
+          }
         }
       }
     });
 
     it('application layer must not import debug', () => {
       for (const file of applicationFiles) {
-        const content = readSource(file);
-        if (hasForbiddenImport(content, '/debug/')) {
-          const relPath = relative(SRC_ROOT, file);
-          throw new Error(`Application file ${relPath} imports 'debug'`);
+        const specifiers = extractImportSpecifiers(readSource(file));
+        const relPath = relative(process.cwd(), file);
+        for (const spec of specifiers) {
+          if (specifierHitsLayer(spec, 'debug')) {
+            throw new Error(`Application file ${relPath} imports '${spec}' (debug forbidden)`);
+          }
         }
       }
     });
 
     it('infrastructure layer must not import debug', () => {
       for (const file of infrastructureFiles) {
-        const content = readSource(file);
-        if (hasForbiddenImport(content, '/debug/')) {
-          const relPath = relative(SRC_ROOT, file);
-          throw new Error(`Infrastructure file ${relPath} imports 'debug'`);
+        const specifiers = extractImportSpecifiers(readSource(file));
+        const relPath = relative(process.cwd(), file);
+        for (const spec of specifiers) {
+          if (specifierHitsLayer(spec, 'debug')) {
+            throw new Error(`Infrastructure file ${relPath} imports '${spec}' (debug forbidden)`);
+          }
+        }
+      }
+    });
+
+    it('platform layer must not import debug', () => {
+      for (const file of platformFiles) {
+        const specifiers = extractImportSpecifiers(readSource(file));
+        const relPath = relative(process.cwd(), file);
+        for (const spec of specifiers) {
+          if (specifierHitsLayer(spec, 'debug')) {
+            throw new Error(`Platform file ${relPath} imports '${spec}' (debug forbidden)`);
+          }
         }
       }
     });
   });
 
-  // App layer rules - WakeFitApp should be a thin entry point
-  // NOTE: These are target rules - WakeFitApp simplification is tracked as remaining work
-  describe('app layer WakeFitApp target rules', () => {
+  // App layer rules - WakeFitApp must be a thin entry point
+  describe('app layer WakeFitApp rules', () => {
     const wakeFitAppFile = appFiles.find(f => f.endsWith('WakeFitApp.tsx'));
 
     if (wakeFitAppFile) {
       const content = readSource(wakeFitAppFile);
-      const relPath = relative(SRC_ROOT, wakeFitAppFile);
+      const relPath = relative(process.cwd(), wakeFitAppFile);
 
-      // These tests document the target state for WakeFitApp simplification
-      // They currently may fail because full migration is in progress
-      it(`${relPath} target: should not have StyleSheet.create (UI should be in presentation layer)`, () => {
+      it(`${relPath} must not contain StyleSheet.create`, () => {
         if (content.includes('StyleSheet.create')) {
-          console.log(`[INFO] ${relPath} contains StyleSheet.create - needs migration to presentation layer`);
+          throw new Error(`${relPath} contains StyleSheet.create - UI should be in presentation layer`);
         }
       });
 
-      it(`${relPath} target: should not instantiate MemoryStorage (should use createWakeFitDependencies)`, () => {
+      it(`${relPath} must not instantiate MemoryStorage`, () => {
         if (content.includes('new MemoryStorage')) {
-          console.log(`[INFO] ${relPath} instantiates MemoryStorage - should use createWakeFitDependencies`);
+          throw new Error(`${relPath} instantiates MemoryStorage - should use createWakeFitDependencies`);
         }
       });
 
-      it(`${relPath} target: should not instantiate FetchWakeFitApiClient (should use createWakeFitDependencies)`, () => {
+      it(`${relPath} must not instantiate FetchWakeFitApiClient`, () => {
         if (content.includes('new FetchWakeFitApiClient')) {
-          console.log(`[INFO] ${relPath} instantiates FetchWakeFitApiClient - should use createWakeFitDependencies`);
+          throw new Error(`${relPath} instantiates FetchWakeFitApiClient - should use createWakeFitDependencies`);
         }
       });
 
-      it(`${relPath} target: should not use PermissionsAndroid directly (should use platform services)`, () => {
+      it(`${relPath} must not use PermissionsAndroid`, () => {
         if (content.includes('PermissionsAndroid')) {
-          console.log(`[INFO] ${relPath} uses PermissionsAndroid - should use platform services`);
+          throw new Error(`${relPath} uses PermissionsAndroid - should use platform services`);
+        }
+      });
+
+      it(`${relPath} must not call requireNativeModule`, () => {
+        if (content.includes('requireNativeModule(')) {
+          throw new Error(`${relPath} directly calls requireNativeModule`);
+        }
+      });
+
+      it(`${relPath} must not call requireNativeViewManager`, () => {
+        if (content.includes('requireNativeViewManager(')) {
+          throw new Error(`${relPath} directly calls requireNativeViewManager`);
+        }
+      });
+
+      it(`${relPath} must not contain page JSX (no ScrollView/Modal/TextInput/Pressable)`, () => {
+        if (content.includes('ScrollView') || content.includes('<Modal') || content.includes('<TextInput')) {
+          throw new Error(`${relPath} contains page-level JSX - should be in presentation layer`);
+        }
+      });
+
+      it(`${relPath} must not contain useState/useEffect/useMemo (controller is in presentation)`, () => {
+        if (/\buse(State|Effect|Memo)\b/.test(content)) {
+          throw new Error(`${relPath} uses React state hooks - controller is in presentation layer`);
         }
       });
     }

@@ -3,3 +3,5 @@ export { cancelAlarm } from './cancelAlarm.js';
 export { consumePendingAlarmLaunch } from './consumePendingAlarmLaunch.js';
 export { recordCompletedWorkout } from './recordCompletedWorkout.js';
 export { flushWorkoutQueue } from './flushWorkoutQueue.js';
+export { startChallenge } from './startChallenge.js';
+export type { StartChallengeOptions } from './startChallenge.js';

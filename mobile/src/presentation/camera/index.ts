@@ -1,1 +1,2 @@
-export { shouldRenderInlineCamera, shouldUseCameraFirstChallengeLayout } from '../../features/cameraPresentation.ts';
+export { shouldRenderInlineCamera, shouldUseCameraFirstChallengeLayout } from './cameraPresentation.ts';
+export type { CameraPresentationState } from './cameraPresentation.ts';
