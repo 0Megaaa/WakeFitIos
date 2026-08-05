@@ -8,16 +8,24 @@ import { ForegroundLocalAlarmScheduler } from './alarm/ForegroundLocalAlarmSched
 import type { PendingAlarmLaunchService } from '../application/ports/PendingAlarmLaunchService.ts';
 import type { PlatformServices } from './types.ts';
 import type { WakeFitOS } from './runtime/reactNativePlatformRuntime.ts';
+import { getOS, getOSVersion, getAndroidPermissions } from './runtime/reactNativePlatformRuntime.ts';
 
 export type CreatePlatformServicesOptions = {
   platformOS?: WakeFitOS;
+  platformVersion?: number | string | null;
+  androidPermissions?: typeof import('react-native').PermissionsAndroid | null;
   now?: () => number;
   setTimer?: (callback: () => void, delayMs: number) => NodeJS.Timeout | number;
   clearTimer?: (handle: NodeJS.Timeout | number) => void;
 };
 
 export function createPlatformServices(options: CreatePlatformServicesOptions = {}): PlatformServices {
-  const platformOS = options.platformOS ?? 'unknown';
+  // Use provided platformOS, or fall back to real runtime detection.
+  // In production: getOS() returns 'ios'/'android' from Platform.OS.
+  // In Node.js tests: getOS() returns 'unknown' since react-native is unavailable.
+  const platformOS = options.platformOS ?? getOS();
+  const platformVersion = options.platformVersion ?? getOSVersion();
+  const androidPermissions = options.androidPermissions ?? getAndroidPermissions();
 
   const foregroundAlarmEvents = createForegroundAlarmEvents();
   const foregroundScheduler = new ForegroundLocalAlarmScheduler({
@@ -60,7 +68,11 @@ export function createPlatformServices(options: CreatePlatformServicesOptions = 
     alarmAlertService,
     pendingAlarmLaunchService,
     foregroundAlarmEvents,
-    permissionService: createPermissionService({ platformOS }),
+    permissionService: createPermissionService({
+      platformOS,
+      platformVersion,
+      androidPermissions,
+    }),
     poseCamera: {
       supported: supportsNativePoseCameraPlatform(platformOS),
     },

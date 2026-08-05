@@ -220,11 +220,10 @@ export function computeNextFireAt(timeOfDay: string): string {
 
 export function useWakeFitController(dependencies: WakeFitDependencies, isDebugToolsEnabled = false): WakeFitControllerResult {
   const {
-    storage,
-    platform,
     deviceId,
     createApiClient,
     createSyncQueue,
+    platform,
   } = dependencies;
 
   const tokenRef = useRef<string | null>(null);
@@ -651,8 +650,11 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
     }
   }, [ensureGuestSession, refreshDashboard, syncQueue]);
 
-  // storage is used by the sync queue through dependencies.storage
-  void storage;
+  // Clear token when backendUrl changes so old token is never sent to a new server.
+  useEffect(() => {
+    tokenRef.current = null;
+    setToken(null);
+  }, [backendUrl]);
 
   const state: WakeFitControllerState = {
     tab,

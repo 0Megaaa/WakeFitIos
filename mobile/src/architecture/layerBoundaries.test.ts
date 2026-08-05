@@ -186,6 +186,30 @@ describe('architecture layer boundaries', () => {
           }
         }
       });
+
+      it(`${relPath} must not call requireNativeModule('react-native')`, () => {
+        if (/requireNativeModule\s*\(\s*['"]react-native['"]\s*\)/.test(content)) {
+          throw new Error(`Platform file ${relPath} calls requireNativeModule('react-native')`);
+        }
+      });
+
+      it(`${relPath} must not call getExpoNativeModule('react-native')`, () => {
+        if (/getExpoNativeModule\s*\(\s*['"]react-native['"]\s*\)/.test(content)) {
+          throw new Error(`Platform file ${relPath} calls getExpoNativeModule('react-native')`);
+        }
+      });
+
+      it(`${relPath} must not use createRequire from node:module`, () => {
+        if (/createRequire\s*\(/.test(content)) {
+          throw new Error(`Platform file ${relPath} uses createRequire from node:module`);
+        }
+      });
+
+      it(`${relPath} must not use __filename`, () => {
+        if (/__filename/.test(content)) {
+          throw new Error(`Platform file ${relPath} uses __filename`);
+        }
+      });
     }
   });
 

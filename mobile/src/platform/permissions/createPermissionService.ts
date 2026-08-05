@@ -1,4 +1,4 @@
-import { getNativeModule } from '../runtime/reactNativePlatformRuntime.ts';
+import { getExpoNativeModule } from '../runtime/reactNativePlatformRuntime.ts';
 import type { WakeFitOS } from '../runtime/reactNativePlatformRuntime.ts';
 import type { PermissionService, PermissionStatus } from '../../application/ports/PermissionService.js';
 
@@ -26,7 +26,7 @@ export function normalizePermissionStatus(value: unknown): PermissionStatus {
 
 function getWakeFitModule(): WakeFitPermissionModule | null {
   try {
-    return getNativeModule<WakeFitPermissionModule>('WakeFitPoseDetector');
+    return getExpoNativeModule<WakeFitPermissionModule>('WakeFitPoseDetector');
   } catch {
     return null;
   }
@@ -48,35 +48,47 @@ function toPermissionStatus(result: string): PermissionStatus {
 
 export type CreatePermissionServiceOptions = {
   platformOS: WakeFitOS;
+  platformVersion?: number | string | null;
+  androidPermissions?: typeof import('react-native').PermissionsAndroid | null;
+  getPermissionModule?: () => WakeFitPermissionModule | null;
 };
 
-export function createPermissionService(options?: CreatePermissionServiceOptions): PermissionService {
-  // Only import runtime adapter when platform is not provided (test mode).
-  // When platformOS is known, skip react-native imports to avoid bundler issues.
-  let getOS: () => WakeFitOS;
-  let getAndroidPermissions: () => typeof import('react-native').PermissionsAndroid | null;
+export function createPermissionService(options: CreatePermissionServiceOptions): PermissionService {
+  const { platformOS, platformVersion } = options;
 
-  if (options?.platformOS) {
-    getOS = () => options.platformOS!;
-    getAndroidPermissions = () => null;
-  } else {
-    const runtime = (() => {
-      try {
-        return require('../runtime/reactNativePlatformRuntime.js');
-      } catch {
-        return null;
-      }
-    })();
-    getOS = () => runtime?.getOS() ?? 'unknown';
-    getAndroidPermissions = () => runtime?.getAndroidPermissions() ?? (() => null);
+  // androidPermissions: use injected value, or fall back to runtime adapter.
+  // NEVER set to null when platformOS is provided - that was the bug.
+  const androidPermissions = options.androidPermissions ?? (() => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { PermissionsAndroid } = require('react-native') as { PermissionsAndroid: typeof import('react-native').PermissionsAndroid };
+      return PermissionsAndroid;
+    } catch {
+      return null;
+    }
+  })();
+
+  // getPermissionModule: use injected function, or fall back to Expo module lookup.
+  const getPermissionModule = options.getPermissionModule ?? getWakeFitModule;
+
+  function getAndroidVersion(): number | null {
+    if (platformVersion === null || platformVersion === undefined) {
+      return null;
+    }
+    const parsed = Number(platformVersion);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function isAndroidBelow33(): boolean {
+    const version = getAndroidVersion();
+    return version !== null && version < 33;
   }
 
   return {
     async getCameraPermissionStatus(): Promise<PermissionStatus> {
-      const platform = getOS();
-      if (platform === 'web') return 'unavailable';
-      if (platform === 'ios') {
-        const mod = getWakeFitModule();
+      if (platformOS === 'web') return 'unavailable';
+      if (platformOS === 'ios') {
+        const mod = getPermissionModule();
         if (!mod?.getCameraPermissionStatus) return 'unavailable';
         try {
           return normalizePermissionStatus(await mod.getCameraPermissionStatus());
@@ -84,11 +96,10 @@ export function createPermissionService(options?: CreatePermissionServiceOptions
           return 'unavailable';
         }
       }
-      if (platform !== 'android') return 'unavailable';
-      const android = getAndroidPermissions();
-      if (!android) return 'unavailable';
+      if (platformOS !== 'android') return 'unavailable';
+      if (!androidPermissions) return 'unavailable';
       try {
-        const granted = await android.check(android.PERMISSIONS.CAMERA);
+        const granted = await androidPermissions.check(androidPermissions.PERMISSIONS.CAMERA);
         return granted ? 'granted' : 'denied';
       } catch {
         return 'unavailable';
@@ -96,10 +107,9 @@ export function createPermissionService(options?: CreatePermissionServiceOptions
     },
 
     async requestCameraPermission(): Promise<PermissionStatus> {
-      const platform = getOS();
-      if (platform === 'web') return 'unavailable';
-      if (platform === 'ios') {
-        const mod = getWakeFitModule();
+      if (platformOS === 'web') return 'unavailable';
+      if (platformOS === 'ios') {
+        const mod = getPermissionModule();
         if (!mod?.requestCameraPermission) return 'unavailable';
         try {
           return normalizePermissionStatus(await mod.requestCameraPermission());
@@ -107,18 +117,16 @@ export function createPermissionService(options?: CreatePermissionServiceOptions
           return 'unavailable';
         }
       }
-      if (platform !== 'android') return 'unavailable';
-      const android = getAndroidPermissions();
-      if (!android) return 'unavailable';
-      const result = await android.request(android.PERMISSIONS.CAMERA);
+      if (platformOS !== 'android') return 'unavailable';
+      if (!androidPermissions) return 'unavailable';
+      const result = await androidPermissions.request(androidPermissions.PERMISSIONS.CAMERA);
       return toPermissionStatus(result);
     },
 
     async getNotificationPermissionStatus(): Promise<PermissionStatus> {
-      const platform = getOS();
-      if (platform === 'web') return 'unavailable';
-      if (platform === 'ios') {
-        const mod = getWakeFitModule();
+      if (platformOS === 'web') return 'unavailable';
+      if (platformOS === 'ios') {
+        const mod = getPermissionModule();
         if (!mod?.getNotificationPermissionStatus) return 'unavailable';
         try {
           return normalizePermissionStatus(await mod.getNotificationPermissionStatus());
@@ -126,11 +134,12 @@ export function createPermissionService(options?: CreatePermissionServiceOptions
           return 'unavailable';
         }
       }
-      if (platform !== 'android') return 'unavailable';
-      const android = getAndroidPermissions();
-      if (!android) return 'unavailable';
+      if (platformOS !== 'android') return 'unavailable';
+      // Android < 33: notifications are granted by default
+      if (isAndroidBelow33()) return 'granted';
+      if (!androidPermissions) return 'unavailable';
       try {
-        const granted = await android.check('android.permission.POST_NOTIFICATIONS' as never);
+        const granted = await androidPermissions.check('android.permission.POST_NOTIFICATIONS' as never);
         return granted ? 'granted' : 'not_determined';
       } catch {
         return 'unavailable';
@@ -138,10 +147,9 @@ export function createPermissionService(options?: CreatePermissionServiceOptions
     },
 
     async requestNotificationPermission(): Promise<PermissionStatus> {
-      const platform = getOS();
-      if (platform === 'web') return 'unavailable';
-      if (platform === 'ios') {
-        const mod = getWakeFitModule();
+      if (platformOS === 'web') return 'unavailable';
+      if (platformOS === 'ios') {
+        const mod = getPermissionModule();
         if (!mod?.requestNotificationPermission) return 'unavailable';
         try {
           return normalizePermissionStatus(await mod.requestNotificationPermission());
@@ -149,10 +157,11 @@ export function createPermissionService(options?: CreatePermissionServiceOptions
           return 'unavailable';
         }
       }
-      if (platform !== 'android') return 'unavailable';
-      const android = getAndroidPermissions();
-      if (!android) return 'unavailable';
-      const result = await android.request('android.permission.POST_NOTIFICATIONS' as never);
+      if (platformOS !== 'android') return 'unavailable';
+      // Android < 33: notifications are always granted
+      if (isAndroidBelow33()) return 'granted';
+      if (!androidPermissions) return 'unavailable';
+      const result = await androidPermissions.request('android.permission.POST_NOTIFICATIONS' as never);
       return toPermissionStatus(result);
     },
   };

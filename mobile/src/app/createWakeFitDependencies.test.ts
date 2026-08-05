@@ -135,4 +135,19 @@ describe('createPlatformServices', () => {
       }, 30);
     });
   });
+
+  it('createPlatformServices({ platformOS: "ios" }) → poseCamera.supported === true', () => {
+    const services = createPlatformServices({ platformOS: 'ios' });
+    assert.equal(services.poseCamera.supported, true);
+  });
+
+  it('createPlatformServices({ platformOS: "android" }) → poseCamera.supported === true', () => {
+    const services = createPlatformServices({ platformOS: 'android' });
+    assert.equal(services.poseCamera.supported, true);
+  });
+
+  it('createPlatformServices({ platformOS: "web" }) → poseCamera.supported === false', () => {
+    const services = createPlatformServices({ platformOS: 'web' });
+    assert.equal(services.poseCamera.supported, false);
+  });
 });

@@ -1,4 +1,4 @@
-import { getNativeModule } from '../runtime/reactNativePlatformRuntime.ts';
+import { getExpoNativeModule } from '../runtime/reactNativePlatformRuntime.ts';
 import { createMirroredLocalAlarmScheduler, createNativeLocalAlarmScheduler, consumePendingAlarmLaunch, type NativeAlarmLaunch, type NativeAlarmModule } from './nativeAlarmBridge.ts';
 import { ForegroundLocalAlarmScheduler, type LocalAlarmScheduleRequest, type LocalAlarmScheduler } from './ForegroundLocalAlarmScheduler.ts';
 
@@ -10,7 +10,7 @@ function getWakeFitModule(): NativeAlarmModule | null {
   }
 
   try {
-    cachedWakeFitModule = getNativeModule<NativeAlarmModule>('WakeFitPoseDetector');
+    cachedWakeFitModule = getExpoNativeModule<NativeAlarmModule>('WakeFitPoseDetector');
   } catch {
     cachedWakeFitModule = null;
   }

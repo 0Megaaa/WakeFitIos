@@ -1,15 +1,9 @@
 import { createAlarmAlertController, type AlarmAlertController } from '../../application/ports/AlarmAlertService.ts';
-import { getNativeModule, getOS, getVibration } from '../runtime/reactNativePlatformRuntime.ts';
+import { getExpoNativeModule, getOS, getVibration, getReactNativeModules } from '../runtime/reactNativePlatformRuntime.ts';
 
 type WakeFitPoseDetectorModule = {
   startAlarmTone?: () => Promise<void>;
   stopAlarmTone?: () => Promise<void>;
-};
-
-type RNSoundNativeModules = {
-  SoundManager?: {
-    playTouchSound?: () => void;
-  };
 };
 
 let cachedWakeFitModule: WakeFitPoseDetectorModule | null | undefined;
@@ -20,7 +14,7 @@ function getWakeFitModule(): WakeFitPoseDetectorModule | null {
   }
 
   try {
-    cachedWakeFitModule = getNativeModule<WakeFitPoseDetectorModule>('WakeFitPoseDetector');
+    cachedWakeFitModule = getExpoNativeModule<WakeFitPoseDetectorModule>('WakeFitPoseDetector');
   } catch {
     cachedWakeFitModule = null;
   }
@@ -28,12 +22,10 @@ function getWakeFitModule(): WakeFitPoseDetectorModule | null {
   return cachedWakeFitModule;
 }
 
-function getSoundManager(): RNSoundNativeModules | null {
-  try {
-    return getNativeModule<RNSoundNativeModules>('react-native');
-  } catch {
-    return null;
-  }
+function getSoundManager(): { playTouchSound?: () => void } | null {
+  const modules = getReactNativeModules();
+  if (!modules) return null;
+  return (modules as { SoundManager?: { playTouchSound?: () => void } | null }).SoundManager ?? null;
 }
 
 export function createDeviceAlarmAlert(): AlarmAlertController {
@@ -60,7 +52,7 @@ export function createDeviceAlarmAlert(): AlarmAlertController {
     },
     playFallbackSound: () => {
       const soundManager = getSoundManager();
-      soundManager?.SoundManager?.playTouchSound?.();
+      soundManager?.playTouchSound?.();
     },
   });
 }
