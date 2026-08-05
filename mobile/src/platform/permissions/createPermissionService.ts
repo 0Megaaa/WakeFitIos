@@ -1,6 +1,6 @@
 import { getExpoNativeModule } from '../runtime/reactNativePlatformRuntime.ts';
 import type { WakeFitOS } from '../runtime/reactNativePlatformRuntime.ts';
-import type { PermissionService, PermissionStatus } from '../../application/ports/PermissionService.js';
+import type { PermissionService, PermissionStatus } from '../../application/ports/PermissionService.ts';
 
 type WakeFitPermissionModule = {
   getCameraPermissionStatus?: () => Promise<unknown>;

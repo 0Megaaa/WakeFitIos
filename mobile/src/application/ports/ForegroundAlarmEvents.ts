@@ -1,4 +1,4 @@
-import type { ExerciseType } from '../../domain/exercise/types.js';
+import type { ExerciseType } from '../../domain/exercise/types.ts';
 
 export type ForegroundAlarmEvent = {
   alarmId: string;

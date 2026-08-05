@@ -1,4 +1,4 @@
-import type { PendingAlarmLaunchService, PendingAlarmLaunch } from '../ports/PendingAlarmLaunchService.js';
+import type { PendingAlarmLaunchService, PendingAlarmLaunch } from '../ports/PendingAlarmLaunchService.ts';
 
 export type ConsumePendingAlarmLaunchOptions = {
   service: PendingAlarmLaunchService;

@@ -1,6 +1,6 @@
-import type { WorkoutSyncQueue } from '../ports/WorkoutSyncQueue.js';
-import type { ApiWorkoutUpload } from '../ports/WakeFitApiClient.js';
-import type { RecordWorkoutResult } from '../ports/WorkoutSyncQueue.js';
+import type { WorkoutSyncQueue } from '../ports/WorkoutSyncQueue.ts';
+import type { RecordWorkoutResult } from '../ports/WorkoutSyncQueue.ts';
+import type { ApiWorkoutUpload } from '../ports/WakeFitApiClient.ts';
 
 export type RecordCompletedWorkoutOptions = {
   syncQueue: WorkoutSyncQueue;

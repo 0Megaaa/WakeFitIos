@@ -1,23 +1,12 @@
-import type { Storage } from '../../application/ports/Storage.js';
-import type { WorkoutSyncQueue } from '../../application/ports/WorkoutSyncQueue.js';
-import type { WakeFitApiClient, WorkoutUploadResult } from '../../application/ports/WakeFitApiClient.js';
-import type { ApiWorkoutUpload } from '../api/types.js';
+import type { Storage } from '../../application/ports/Storage.ts';
+import type { WorkoutSyncQueue, RecordWorkoutResult, FlushWorkoutResult } from '../../application/ports/WorkoutSyncQueue.ts';
+import type { WakeFitApiClient } from '../../application/ports/WakeFitApiClient.ts';
+import type { ApiWorkoutUpload } from '../api/types.ts';
 
 export type WorkoutSyncQueueOptions = {
   storage: Storage;
   apiClient: Pick<WakeFitApiClient, 'uploadWorkout'>;
   storageKey?: string;
-};
-
-export type RecordWorkoutResult = {
-  uploaded: boolean;
-  queuedCount: number;
-  uploadResult: WorkoutUploadResult | null;
-};
-
-export type FlushWorkoutResult = {
-  uploadedCount: number;
-  remainingCount: number;
 };
 
 const DEFAULT_STORAGE_KEY = 'wakefit:queued-workouts';

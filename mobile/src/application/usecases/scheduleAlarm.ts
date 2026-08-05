@@ -1,4 +1,4 @@
-import type { AlarmScheduler } from '../ports/AlarmScheduler.js';
+import type { AlarmScheduler } from '../ports/AlarmScheduler.ts';
 
 export type ScheduleAlarmOptions = {
   scheduler: AlarmScheduler;

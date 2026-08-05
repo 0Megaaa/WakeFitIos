@@ -1,1 +1,1 @@
-export { createPermissionService } from './createPermissionService.js';
+export { createPermissionService } from './createPermissionService.ts';

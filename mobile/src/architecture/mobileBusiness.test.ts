@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { createAlarmConfig, updateAlarmConfig } from '../domain/alarm/alarm.ts';
-import { FetchWakeFitApiClient, MemoryStorage } from '../infrastructure/index.js';
-import { createAppSession, createWorkoutSyncQueue } from '../infrastructure/index.js';
+import { FetchWakeFitApiClient, MemoryStorage } from '../infrastructure/index.ts';
+import { createAppSession, createWorkoutSyncQueue } from '../infrastructure/index.ts';
 import { createChallengeFlow } from '../domain/challenge/challengeFlow.ts';
 import { ForegroundLocalAlarmScheduler, MemoryLocalAlarmScheduler } from '../platform/alarm/ForegroundLocalAlarmScheduler.ts';
-import type { ApiAlarm, ApiWorkoutUpload } from '../infrastructure/api/index.js';
+import type { ApiAlarm, ApiWorkoutUpload } from '../infrastructure/api/types.ts';
 import type { PoseFrame, PoseLandmarkName } from '../domain/exercise/types.ts';
 
 function landmark(name: PoseLandmarkName, x: number, y: number, confidence = 0.95) {

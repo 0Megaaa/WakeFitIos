@@ -1,7 +1,7 @@
-import type { ChallengeSnapshot } from '../../domain/challenge/types.js';
-import type { ExerciseType } from '../../domain/exercise/types.js';
-import type { PoseFrame, PoseLandmarkName } from '../../domain/exercise/types.js';
-import { createChallengeFlow } from '../../domain/challenge/challengeFlow.js';
+import type { ChallengeSnapshot } from '../../domain/challenge/types.ts';
+import type { ExerciseType } from '../../domain/exercise/types.ts';
+import type { PoseFrame, PoseLandmarkName } from '../../domain/exercise/types.ts';
+import { createChallengeFlow } from '../../domain/challenge/challengeFlow.ts';
 
 type ChallengeFlow = ReturnType<typeof createChallengeFlow>;
 

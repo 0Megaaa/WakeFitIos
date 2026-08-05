@@ -1,7 +1,7 @@
-export { createAppSession } from './appSession.js';
+export { createAppSession } from './appSession.ts';
 export type {
   WakeFitSession,
   AppSessionOptions,
   DashboardRefreshInput,
   DashboardData,
-} from './appSession.js';
+} from './appSession.ts';

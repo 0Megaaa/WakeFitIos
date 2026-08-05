@@ -1,5 +1,6 @@
-import type { WorkoutSyncQueue } from '../ports/WorkoutSyncQueue.js';
-import type { FlushWorkoutResult } from '../ports/WorkoutSyncQueue.js';
+import type { WorkoutSyncQueue } from '../ports/WorkoutSyncQueue.ts';
+import type { RecordWorkoutResult } from '../ports/WorkoutSyncQueue.ts';
+import type { FlushWorkoutResult } from '../ports/WorkoutSyncQueue.ts';
 
 export type FlushWorkoutQueueOptions = {
   syncQueue: WorkoutSyncQueue;

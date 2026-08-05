@@ -1,6 +1,6 @@
-import type { Storage } from '../../application/ports/Storage.js';
-import type { WakeFitApiClient, StreakSummary, WorkoutCalendar } from '../../application/ports/WakeFitApiClient.js';
-import type { ApiWorkoutUpload } from '../api/types.js';
+import type { Storage } from '../../application/ports/Storage.ts';
+import type { WakeFitApiClient, StreakSummary, WorkoutCalendar } from '../../application/ports/WakeFitApiClient.ts';
+import type { ApiWorkoutUpload } from '../api/types.ts';
 
 export type WakeFitSession = {
   token: string;

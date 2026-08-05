@@ -1,7 +1,7 @@
-export { scheduleAlarm } from './scheduleAlarm.js';
-export { cancelAlarm } from './cancelAlarm.js';
-export { consumePendingAlarmLaunch } from './consumePendingAlarmLaunch.js';
-export { recordCompletedWorkout } from './recordCompletedWorkout.js';
-export { flushWorkoutQueue } from './flushWorkoutQueue.js';
-export { startChallenge } from './startChallenge.js';
-export type { StartChallengeOptions } from './startChallenge.js';
+export { scheduleAlarm } from './scheduleAlarm.ts';
+export { cancelAlarm } from './cancelAlarm.ts';
+export { consumePendingAlarmLaunch } from './consumePendingAlarmLaunch.ts';
+export { recordCompletedWorkout } from './recordCompletedWorkout.ts';
+export { flushWorkoutQueue } from './flushWorkoutQueue.ts';
+export { startChallenge } from './startChallenge.ts';
+export type { StartChallengeOptions } from './startChallenge.ts';

@@ -11,7 +11,7 @@ import type {
   StreakSummary,
   WorkoutCalendar,
   WorkoutUploadResult,
-} from './types.js';
+} from './types.ts';
 
 export type FetchWakeFitApiClientOptions = {
   baseUrl: string;

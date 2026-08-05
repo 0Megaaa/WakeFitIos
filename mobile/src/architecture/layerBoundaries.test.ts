@@ -1,5 +1,5 @@
 import { describe, it } from 'node:test';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
 const SRC_ROOT = join(process.cwd(), 'src');
@@ -79,6 +79,80 @@ function getLayerFromPath(filePath: string): string | null {
   if (normalized.includes('/app/')) return 'app';
   return null;
 }
+
+function resolveSpecPath(filePath: string, spec: string): string | null {
+  if (spec.startsWith('.')) {
+    const baseDir = filePath.substring(0, filePath.lastIndexOf('/'));
+    return join(baseDir, spec);
+  }
+  return null;
+}
+
+function fileExistsAt(path: string): boolean {
+  if (existsSync(path)) return true;
+  if (existsSync(path.replace(/\.tsx?$/, ''))) return true;
+  if (existsSync(join(path, 'index.ts'))) return true;
+  if (existsSync(join(path, 'index.tsx'))) return true;
+  return false;
+}
+
+function resolveSpecToRealPath(filePath: string, spec: string): string | null {
+  const resolved = resolveSpecPath(filePath, spec);
+  if (!resolved) return null;
+
+  if (existsSync(resolved)) return resolved;
+
+  const withoutExt = resolved.replace(/\.tsx?$/, '');
+  if (existsSync(withoutExt)) return withoutExt;
+
+  if (existsSync(join(resolved, 'index.ts'))) return join(resolved, 'index.ts');
+  if (existsSync(join(resolved, 'index.tsx'))) return join(resolved, 'index.tsx');
+
+  return null;
+}
+
+function isThirdPartyPackage(spec: string): boolean {
+  if (!spec.startsWith('.')) return true;
+  return false;
+}
+
+describe('Metro bundle path resolution', () => {
+  const allTsFiles = [
+    ...getAllTsFiles(SRC_ROOT),
+    ...getAllTsFiles(MODULES_ROOT),
+  ];
+
+  for (const file of allTsFiles) {
+    const content = readSource(file);
+    const relPath = relative(process.cwd(), file);
+
+    it(`${relPath} must not import a .js file that maps to a TypeScript source`, () => {
+      const specifiers = extractImportSpecifiers(content);
+      for (const spec of specifiers) {
+        if (!spec.endsWith('.js')) continue;
+        if (isThirdPartyPackage(spec)) continue;
+
+        const realPath = resolveSpecToRealPath(file, spec);
+        if (!realPath) continue;
+
+        const endsWithJs = realPath.endsWith('.js');
+        const realExistsAsJs = existsSync(realPath);
+
+        if (endsWithJs && realExistsAsJs) continue;
+
+        const jsStem = realPath.replace(/\.js$/, '');
+        const tsExists = existsSync(jsStem + '.ts') || existsSync(jsStem + '.tsx') ||
+          existsSync(join(jsStem, 'index.ts')) || existsSync(join(jsStem, 'index.tsx'));
+
+        if (tsExists) {
+          throw new Error(
+            `Stale JavaScript import points to TypeScript source:\n${relPath} -> ${spec}`,
+          );
+        }
+      }
+    });
+  }
+});
 
 describe('architecture layer boundaries', () => {
   const allFiles = [

@@ -1,7 +1,7 @@
-import { MemoryStorage } from '../infrastructure/storage/MemoryStorage.js';
-import { FetchWakeFitApiClient } from '../infrastructure/api/FetchWakeFitApiClient.js';
-import { createWorkoutSyncQueue } from '../infrastructure/sync/createWorkoutSyncQueue.js';
-import { createPlatformServices } from '../platform/createPlatformServices.js';
+import { MemoryStorage } from '../infrastructure/storage/MemoryStorage.ts';
+import { FetchWakeFitApiClient } from '../infrastructure/api/FetchWakeFitApiClient.ts';
+import { createWorkoutSyncQueue } from '../infrastructure/sync/createWorkoutSyncQueue.ts';
+import { createPlatformServices } from '../platform/createPlatformServices.ts';
 import type { WakeFitDependencies } from './types.ts';
 
 let cachedDependencies: WakeFitDependencies | null = null;
