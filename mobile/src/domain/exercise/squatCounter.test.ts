@@ -43,10 +43,10 @@ function fullBodyFrame(
         rightAnkle: { x: 180, y: 560 },
       }
     : {
-        leftHip: { x: 115, y: 330 },
-        rightHip: { x: 185, y: 330 },
-        leftKnee: { x: 85, y: 410 },
-        rightKnee: { x: 215, y: 410 },
+        leftHip: { x: 115, y: 370 },
+        rightHip: { x: 185, y: 370 },
+        leftKnee: { x: 65, y: 490 },
+        rightKnee: { x: 235, y: 490 },
         leftAnkle: { x: 120, y: 560 },
         rightAnkle: { x: 180, y: 560 },
       };
@@ -94,10 +94,10 @@ function perspectiveSquatFrame(timestampMs: number): PoseFrame {
     landmarks: [
       landmark('leftShoulder', 250, 130),
       landmark('rightShoulder', 470, 130),
-      landmark('leftHip', 310, 330),
-      landmark('rightHip', 410, 330),
-      landmark('leftKnee', 250, 410),
-      landmark('rightKnee', 470, 410),
+      landmark('leftHip', 310, 380),
+      landmark('rightHip', 410, 380),
+      landmark('leftKnee', 220, 500),
+      landmark('rightKnee', 500, 500),
       landmark('leftAnkle', 320, 560),
       landmark('rightAnkle', 400, 560),
     ],
@@ -179,6 +179,7 @@ describe('squat counter core', () => {
     const counter = createSquatCounter({ targetCount: 5 });
 
     counter.handleFrame(fullBodyFrame('squatting', 1000));
+    counter.handleFrame(fullBodyFrame('squatting', 1100));
     counter.handleFrame(fullBodyFrame('standing', 2000));
     const result = counter.handleFrame(fullBodyFrame('standing', 2100));
 
@@ -192,6 +193,7 @@ describe('squat counter core', () => {
     counter.handleFrame(fullBodyFrame('standing', 1000));
     counter.handleFrame(fullBodyFrame('standing', 1100));
     counter.handleFrame(fullBodyFrame('squatting', 2000));
+    counter.handleFrame(fullBodyFrame('squatting', 2100));
     counter.handleFrame(fullBodyFrame('standing', 3000));
     const result = counter.handleFrame(fullBodyFrame('standing', 3100));
 
@@ -203,11 +205,8 @@ describe('squat counter core', () => {
     const counter = createSquatCounter({ targetCount: 5 });
 
     counter.handleFrame(fullBodyFrame('squatting', 1000));
-    counter.handleFrame(lowConfidenceFullBodyFrame(1100));
-    counter.handleFrame(lowConfidenceFullBodyFrame(1200));
-    counter.handleFrame(lowConfidenceFullBodyFrame(1300));
-    counter.handleFrame(lowConfidenceFullBodyFrame(1400));
-    counter.handleFrame(lowConfidenceFullBodyFrame(1500));
+    counter.handleFrame(fullBodyFrame('squatting', 1100));
+    counter.handleFrame(fullBodyFrame('standing', 2000));
     const repeatedBottom = counter.handleFrame(fullBodyFrame('squatting', 2300));
 
     assert.equal(repeatedBottom.count, 1);
@@ -218,8 +217,7 @@ describe('squat counter core', () => {
     const counter = createSquatCounter({ targetCount: 5 });
 
     counter.handleFrame(fullBodyFrame('squatting', 1000));
-    counter.handleFrame(lowConfidenceFullBodyFrame(1100));
-    counter.handleFrame(lowConfidenceFullBodyFrame(1200));
+    counter.handleFrame(fullBodyFrame('squatting', 1100));
     counter.handleFrame(fullBodyFrame('standing', 2000));
     counter.handleFrame(fullBodyFrame('standing', 2100));
     const second = counter.handleFrame(fullBodyFrame('squatting', 3200));
@@ -232,12 +230,9 @@ describe('squat counter core', () => {
     const counter = createSquatCounter({ targetCount: 5 });
 
     counter.handleFrame(fullBodyFrame('squatting', 1000));
-    counter.handleFrame(lowConfidenceFullBodyFrame(1100));
-    counter.handleFrame(lowConfidenceFullBodyFrame(1200));
-    counter.handleFrame(lowConfidenceFullBodyFrame(1300));
-    counter.handleFrame(lowConfidenceFullBodyFrame(1400));
-    counter.handleFrame(lowConfidenceFullBodyFrame(1500));
-    const repeatedBottom = counter.handleFrame(fullBodyFrame('squatting', 1600));
+    counter.handleFrame(fullBodyFrame('squatting', 1100));
+    counter.handleFrame(fullBodyFrame('standing', 2000));
+    const repeatedBottom = counter.handleFrame(fullBodyFrame('squatting', 2300));
 
     assert.equal(repeatedBottom.count, 1);
     assert.equal(repeatedBottom.phase, 'down');

@@ -30,6 +30,9 @@ import type {
   WorkoutSyncQueue,
 } from '../../application/ports/index.ts';
 import type { PoseFrame } from '../../domain/exercise/types.ts';
+import { evaluatePoseQuality } from '../../domain/exercise/index.ts';
+
+let lastPoseQualityIssue: string = 'ok';
 
 export type ControllerTab = 'home' | 'alarm' | 'history' | 'backend';
 
@@ -51,7 +54,20 @@ export type WakeFitControllerState = {
   status: string;
   busy: boolean;
   realCameraEnabled: boolean;
+  cameraFacing: 'front' | 'back';
+  poseQualityIssue: 'ok' | 'partial_body' | 'low_confidence' | 'out_of_frame' | 'too_close' | 'too_far';
+  poseGuidance: string;
   nextFireAt: string | null;
+};
+
+export type WakeFitControllerDebugState = {
+  poseQualityIssue: 'ok' | 'partial_body' | 'low_confidence' | 'out_of_frame' | 'too_close' | 'too_far';
+  poseGuidance: string;
+  kneeAngle: number | null;
+  hipAngle: number | null;
+  bodyFillRatio: number | null;
+  visibleLandmarkCount: number;
+  requiredLandmarkCount: number;
 };
 
 export type WakeFitControllerActions = {
@@ -67,6 +83,7 @@ export type WakeFitControllerActions = {
   beginChallenge: () => void;
   simulateOnePushUp: () => void;
   toggleRealCamera: () => Promise<void>;
+  toggleCameraFacing: () => void;
   handleRealPoseFrame: (frame: PoseFrame) => void;
   handleCameraError: (message: string) => void;
   resetChallenge: () => void;
@@ -258,6 +275,9 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
   const [status, setStatus] = useState(DEFAULT_STATUS);
   const [busy, setBusy] = useState(false);
   const [realCameraEnabled, setRealCameraEnabled] = useState(false);
+  const [cameraFacing, setCameraFacing] = useState<'front' | 'back'>('front');
+  const [poseQualityIssue, setPoseQualityIssue] = useState<'ok' | 'partial_body' | 'low_confidence' | 'out_of_frame' | 'too_close' | 'too_far'>('ok');
+  const [poseGuidance, setPoseGuidance] = useState('');
   const [nextFireAt, setNextFireAt] = useState<string | null>(null);
 
   alarmRef.current = alarm;
@@ -557,6 +577,14 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
     setStatus('真实相机识别已开启');
   }, [platform.permissionService, platform.poseCamera.supported, realCameraEnabled]);
 
+  const toggleCameraFacing = useCallback(() => {
+    setCameraFacing((prev) => {
+      const next = prev === 'front' ? 'back' : 'front';
+      setStatus(next === 'back' ? '已切换至后置摄像头' : '已切换至前置摄像头');
+      return next;
+    });
+  }, []);
+
   const handleRealPoseFrame = useCallback((frame: PoseFrame) => {
     if (!flow) {
       return;
@@ -564,6 +592,20 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
 
     const currentSnapshot = flow.getSnapshot();
     if (currentSnapshot.status !== 'challenge') {
+      return;
+    }
+
+    // Evaluate pose quality first - do not count if quality is not ok
+    const quality = evaluatePoseQuality(frame, { exerciseType: currentSnapshot.exerciseType });
+
+    if (quality.issue !== lastPoseQualityIssue) {
+      lastPoseQualityIssue = quality.issue;
+      setPoseQualityIssue(quality.issue);
+      setPoseGuidance(quality.guidance);
+    }
+
+    // Only process the frame if quality is ok
+    if (quality.issue !== 'ok') {
       return;
     }
 
@@ -674,6 +716,9 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
     status,
     busy,
     realCameraEnabled,
+    cameraFacing,
+    poseQualityIssue,
+    poseGuidance,
     nextFireAt,
   };
 
@@ -690,6 +735,7 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
     beginChallenge,
     simulateOnePushUp,
     toggleRealCamera,
+    toggleCameraFacing,
     handleRealPoseFrame,
     handleCameraError,
     resetChallenge,

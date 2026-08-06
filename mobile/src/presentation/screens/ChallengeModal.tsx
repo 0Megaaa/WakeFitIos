@@ -62,7 +62,7 @@ export function ChallengeModal({ state, actions, isDebugToolsEnabled }: Challeng
               <View style={wakeFitStyles.alarmCameraStage}>
                 <NativePoseCameraView
                   style={wakeFitStyles.alarmCameraPreview}
-                  cameraFacing="front"
+                  cameraFacing={state.cameraFacing}
                   onPoseFrame={actions.handleRealPoseFrame}
                   onCameraError={actions.handleCameraError}
                   fallback={
@@ -76,12 +76,18 @@ export function ChallengeModal({ state, actions, isDebugToolsEnabled }: Challeng
                   <Text style={wakeFitStyles.alarmCameraCounterText}>{state.snapshot?.count ?? 0}/{state.snapshot?.targetCount ?? 0}</Text>
                   <Text style={wakeFitStyles.alarmCameraCounterLabel}>{activeExerciseLabel}</Text>
                 </View>
+                {state.poseGuidance ? (
+                  <View style={wakeFitStyles.alarmPoseGuidanceOverlay} pointerEvents="none">
+                    <Text style={wakeFitStyles.alarmPoseGuidanceText}>{state.poseGuidance}</Text>
+                  </View>
+                ) : null}
                 <View style={wakeFitStyles.alarmCameraHud}>
                   <View style={[wakeFitStyles.progressTrack, wakeFitStyles.alarmProgressTrack]}>
                     <View style={[wakeFitStyles.progressFill, { width: `${progressPercent}%` }]} />
                   </View>
                   <View style={wakeFitStyles.buttonRow}>
                     <AppButton label="关闭相机" variant="secondary" onPress={() => void actions.toggleRealCamera()} disabled={state.busy} />
+                    <AppButton label={state.cameraFacing === 'front' ? '后置' : '前置'} variant="secondary" onPress={() => void actions.toggleCameraFacing()} disabled={state.busy} />
                     {isDebugToolsEnabled && (
                       <AppButton label="模拟一次" onPress={actions.simulateOnePushUp} disabled={state.busy} />
                     )}

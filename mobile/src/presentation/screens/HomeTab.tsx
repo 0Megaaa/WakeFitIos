@@ -74,7 +74,7 @@ export function HomeTab({ state, actions, isDebugToolsEnabled }: HomeTabProps) {
             {inlineCameraVisible ? (
               <NativePoseCameraView
                 style={wakeFitStyles.cameraPreview}
-                cameraFacing="front"
+                cameraFacing={state.cameraFacing}
                 onPoseFrame={actions.handleRealPoseFrame}
                 onCameraError={actions.handleCameraError}
                 fallback={
@@ -87,6 +87,9 @@ export function HomeTab({ state, actions, isDebugToolsEnabled }: HomeTabProps) {
             ) : (
               <PosePreview progress={progressPercent} />
             )}
+            {state.poseGuidance ? (
+              <Text style={wakeFitStyles.poseGuidanceText}>{state.poseGuidance}</Text>
+            ) : null}
             <View style={wakeFitStyles.progressHeader}>
               <Text style={wakeFitStyles.progressText}>{state.snapshot?.count ?? 0}/{state.snapshot?.targetCount ?? state.alarm.targetCount}</Text>
               <Text style={wakeFitStyles.subtleText}>{activeExerciseLabel}</Text>
@@ -96,6 +99,9 @@ export function HomeTab({ state, actions, isDebugToolsEnabled }: HomeTabProps) {
             </View>
             <View style={wakeFitStyles.buttonRow}>
               <AppButton label={state.realCameraEnabled ? '关闭相机' : '真实相机'} variant="secondary" onPress={actions.toggleRealCamera} disabled={state.busy} />
+              {state.realCameraEnabled && (
+                <AppButton label={state.cameraFacing === 'front' ? '后置' : '前置'} variant="secondary" onPress={actions.toggleCameraFacing} disabled={state.busy} />
+              )}
               {isDebugToolsEnabled && (
                 <AppButton label="模拟一次" onPress={actions.simulateOnePushUp} disabled={state.busy} />
               )}

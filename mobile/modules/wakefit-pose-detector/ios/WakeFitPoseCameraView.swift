@@ -16,12 +16,13 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
     }
   }
 
-  private let captureSession = AVCaptureSession()
   private let sessionQueue = DispatchQueue(label: "wakefit.camera.session")
   private let visionQueue = DispatchQueue(label: "wakefit.camera.vision")
   private let videoOutput = AVCaptureVideoDataOutput()
   private let overlayView = WakeFitPoseOverlayView()
+  private let confidenceThreshold: Float32 = 0.55
 
+  private var captureSession: AVCaptureSession?
   private var previewLayer: AVCaptureVideoPreviewLayer?
   private var cameraStarted = false
   private var isProcessingFrame = false
@@ -97,9 +98,11 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
       }
 
       do {
-        try self.configureSession(facing: requestedFacing)
-        if !self.captureSession.isRunning {
-          self.captureSession.startRunning()
+        let session = try self.configureSession(facing: requestedFacing)
+        self.captureSession = session
+
+        if !session.isRunning {
+          session.startRunning()
         }
 
         DispatchQueue.main.async {
@@ -115,7 +118,7 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
   }
 
   private func stopCamera() {
-    guard cameraStarted else {
+    guard cameraStarted, let session = captureSession else {
       overlayView.clearPose()
       return
     }
@@ -125,39 +128,32 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
     loggedFirstPose = false
     emittedVisionUnavailable = false
     overlayView.clearPose()
-    previewLayer?.removeFromSuperlayer()
-    previewLayer = nil
 
-    sessionQueue.async { [weak self] in
-      guard let self else {
-        return
-      }
+    DispatchQueue.main.async { [weak self] in
+      self?.previewLayer?.removeFromSuperlayer()
+      self?.previewLayer = nil
+    }
 
-      if self.captureSession.isRunning {
-        self.captureSession.stopRunning()
+    sessionQueue.async {
+      if session.isRunning {
+        session.stopRunning()
       }
-      self.videoOutput.setSampleBufferDelegate(nil, queue: nil)
-      self.captureSession.beginConfiguration()
-      self.captureSession.inputs.forEach { self.captureSession.removeInput($0) }
-      self.captureSession.outputs.forEach { self.captureSession.removeOutput($0) }
-      self.captureSession.commitConfiguration()
     }
   }
 
-  private func configureSession(facing: String) throws {
-    captureSession.beginConfiguration()
+  private func configureSession(facing: String) throws -> AVCaptureSession {
+    let session = AVCaptureSession()
+
+    session.beginConfiguration()
     defer {
-      captureSession.commitConfiguration()
+      session.commitConfiguration()
     }
 
-    if captureSession.canSetSessionPreset(.vga640x480) {
-      captureSession.sessionPreset = .vga640x480
+    if session.canSetSessionPreset(.vga640x480) {
+      session.sessionPreset = .vga640x480
     } else {
-      captureSession.sessionPreset = .medium
+      session.sessionPreset = .medium
     }
-
-    captureSession.inputs.forEach { captureSession.removeInput($0) }
-    captureSession.outputs.forEach { captureSession.removeOutput($0) }
 
     let position: AVCaptureDevice.Position = facing == "back" ? .back : .front
     guard
@@ -168,54 +164,72 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
     }
 
     let input = try AVCaptureDeviceInput(device: device)
-    guard captureSession.canAddInput(input) else {
+    guard session.canAddInput(input) else {
       throw WakeFitCameraError("CAMERA_INPUT_NOT_SUPPORTED")
     }
-    captureSession.addInput(input)
+    session.addInput(input)
 
-    videoOutput.alwaysDiscardsLateVideoFrames = true
-    videoOutput.videoSettings = [
+    let output = AVCaptureVideoDataOutput()
+    output.alwaysDiscardsLateVideoFrames = true
+    output.videoSettings = [
       kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
     ]
-    videoOutput.setSampleBufferDelegate(self, queue: visionQueue)
+    output.setSampleBufferDelegate(self, queue: visionQueue)
 
-    guard captureSession.canAddOutput(videoOutput) else {
+    guard session.canAddOutput(output) else {
       throw WakeFitCameraError("CAMERA_OUTPUT_NOT_SUPPORTED")
     }
-    captureSession.addOutput(videoOutput)
+    session.addOutput(output)
 
-    if let connection = videoOutput.connection(with: .video) {
-      configureConnection(connection, facing: facing)
+    // Configure video output connection: never mirror the raw pixel buffer
+    // Vision needs consistent orientation to interpret landmarks correctly
+    if let connection = output.connection(with: .video) {
+      configureVideoOutputConnection(connection, facing: facing)
     }
 
     activeFacing = facing
+    return session
   }
 
   private func installPreviewLayer() {
-    guard cameraStarted else {
+    guard cameraStarted, let session = captureSession else {
       return
     }
 
     if previewLayer == nil {
-      let layer = AVCaptureVideoPreviewLayer(session: captureSession)
+      let layer = AVCaptureVideoPreviewLayer(session: session)
       layer.videoGravity = .resizeAspectFill
-      self.layer.insertSublayer(layer, at: 0)
+      self.layer.insertSubview(layer, at: 0)
       previewLayer = layer
     }
 
     previewLayer?.frame = bounds
     if let connection = previewLayer?.connection {
-      configureConnection(connection, facing: activeFacing)
+      configurePreviewConnection(connection, facing: activeFacing)
     }
   }
 
-  private func configureConnection(_ connection: AVCaptureConnection, facing: String) {
+  /// Preview connection: mirror for front camera (user expectation)
+  private func configurePreviewConnection(_ connection: AVCaptureConnection, facing: String) {
     if connection.isVideoOrientationSupported {
       connection.videoOrientation = .portrait
     }
     if connection.isVideoMirroringSupported {
       connection.automaticallyAdjustsVideoMirroring = false
       connection.isVideoMirrored = facing != "back"
+    }
+  }
+
+  /// Video output connection: NEVER mirror the raw pixel buffer
+  /// Vision processes raw pixels with a consistent coordinate system
+  private func configureVideoOutputConnection(_ connection: AVCaptureConnection, facing: String) {
+    if connection.isVideoOrientationSupported {
+      connection.videoOrientation = .portrait
+    }
+    if connection.isVideoMirroringSupported {
+      connection.automaticallyAdjustsVideoMirroring = false
+      // IMPORTANT: Never mirror the video output - Vision needs raw pixel coordinates
+      connection.isVideoMirrored = false
     }
   }
 
@@ -255,14 +269,8 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
 
   @available(iOS 14.0, *)
   private func detectPose(in pixelBuffer: CVPixelBuffer, facing: String) {
-    let orientation = imageOrientation(facing: facing)
-    let imageSize = orientedImageSize(
-      pixelWidth: CVPixelBufferGetWidth(pixelBuffer),
-      pixelHeight: CVPixelBufferGetHeight(pixelBuffer),
-      orientation: orientation
-    )
     let request = VNDetectHumanBodyPoseRequest()
-    let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation, options: [:])
+    let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
 
     do {
       try handler.perform([request])
@@ -274,7 +282,7 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
         return
       }
 
-      let points = try collectPosePoints(from: observation, imageSize: imageSize)
+      let points = try collectPosePoints(from: observation, pixelBuffer: pixelBuffer, facing: facing)
       if !loggedFirstPose, !points.isEmpty {
         loggedFirstPose = true
         NSLog("WakeFitCamera first iOS pose landmarks=%d", points.count)
@@ -285,16 +293,23 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
           return
         }
 
+        let imageWidth = CVPixelBufferGetWidth(pixelBuffer)
+        let imageHeight = CVPixelBufferGetHeight(pixelBuffer)
+
         self.overlayView.updatePose(
           points: points,
-          imageWidth: imageSize.width,
-          imageHeight: imageSize.height
+          imageWidth: imageWidth,
+          imageHeight: imageHeight
         )
+
         self.onPoseFrame([
           "timestampMs": Date().timeIntervalSince1970 * 1000,
-          "imageWidth": Double(imageSize.width),
-          "imageHeight": Double(imageSize.height),
-          "landmarks": points.map { self.toEventLandmark($0) }
+          "imageWidth": Double(imageWidth),
+          "imageHeight": Double(imageHeight),
+          "landmarks": points.map { self.toEventLandmark($0) },
+          "cameraFacing": facing,
+          "source": "apple-vision",
+          "coordinateSpace": "upright-top-left-unmirrored"
         ])
       }
     } catch {
@@ -309,18 +324,24 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
   @available(iOS 14.0, *)
   private func collectPosePoints(
     from observation: VNHumanBodyPoseObservation,
-    imageSize: CGSize
+    pixelBuffer: CVPixelBuffer,
+    facing: String
   ) throws -> [WakeFitPosePoint] {
     let recognizedPoints = try observation.recognizedPoints(.all)
     return jointMappings.compactMap { mapping in
-      guard let point = recognizedPoints[mapping.joint], point.confidence > 0 else {
+      guard let point = recognizedPoints[mapping.joint], point.confidence > self.confidenceThreshold else {
         return nil
       }
 
+      // Vision coordinates are normalized [0,1] with origin at bottom-left
+      // Convert to upright-top-left-unmirrored coordinate space
+      let x = point.location.x * CGFloat(CVPixelBufferGetWidth(pixelBuffer))
+      let y = (1 - point.location.y) * CGFloat(CVPixelBufferGetHeight(pixelBuffer))
+
       return WakeFitPosePoint(
         name: mapping.name,
-        x: point.location.x * imageSize.width,
-        y: (1 - point.location.y) * imageSize.height,
+        x: x,
+        y: y,
         confidence: point.confidence
       )
     }
@@ -333,23 +354,6 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
       "y": Double(point.y),
       "confidence": Double(point.confidence)
     ]
-  }
-
-  private func imageOrientation(facing: String) -> CGImagePropertyOrientation {
-    return facing == "back" ? .right : .leftMirrored
-  }
-
-  private func orientedImageSize(
-    pixelWidth: Int,
-    pixelHeight: Int,
-    orientation: CGImagePropertyOrientation
-  ) -> CGSize {
-    switch orientation {
-    case .left, .leftMirrored, .right, .rightMirrored:
-      return CGSize(width: pixelHeight, height: pixelWidth)
-    default:
-      return CGSize(width: pixelWidth, height: pixelHeight)
-    }
   }
 
   private func emitCameraError(_ message: String) {

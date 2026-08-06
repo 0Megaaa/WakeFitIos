@@ -46,10 +46,10 @@ function squatFrame(
         rightAnkle: { x: 180, y: 560 },
       }
     : {
-        leftHip: { x: 115, y: 330 },
-        rightHip: { x: 185, y: 330 },
-        leftKnee: { x: 85, y: 410 },
-        rightKnee: { x: 215, y: 410 },
+        leftHip: { x: 115, y: 370 },
+        rightHip: { x: 185, y: 370 },
+        leftKnee: { x: 65, y: 490 },
+        rightKnee: { x: 235, y: 490 },
         leftAnkle: { x: 120, y: 560 },
         rightAnkle: { x: 180, y: 560 },
       };

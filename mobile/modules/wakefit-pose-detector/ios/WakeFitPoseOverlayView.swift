@@ -12,6 +12,8 @@ final class WakeFitPoseOverlayView: UIView {
   private var imageWidth: CGFloat = 0
   private var imageHeight: CGFloat = 0
 
+  private let confidenceThreshold: Float = 0.55
+
   override init(frame: CGRect) {
     super.init(frame: frame)
     backgroundColor = .clear
@@ -54,8 +56,8 @@ final class WakeFitPoseOverlayView: UIView {
       guard
         let first = byName[connection.0],
         let second = byName[connection.1],
-        first.confidence >= 0.2,
-        second.confidence >= 0.2
+        first.confidence >= confidenceThreshold,
+        second.confidence >= confidenceThreshold
       else {
         continue
       }
@@ -66,7 +68,7 @@ final class WakeFitPoseOverlayView: UIView {
 
     skeleton.stroke()
 
-    for point in points where point.confidence >= 0.2 {
+    for point in points where point.confidence >= confidenceThreshold {
       let center = transform(point)
       UIBezierPath(
         ovalIn: CGRect(x: center.x - 4, y: center.y - 4, width: 8, height: 8)

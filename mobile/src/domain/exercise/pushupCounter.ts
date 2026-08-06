@@ -1,9 +1,6 @@
 import { classifySquatPoseFrame, type SquatPoseClassification } from './squatPoseClassifier.ts';
 import type {
   PoseFrame,
-  PoseLandmark,
-  PoseLandmarkName,
-  Point,
   PushUpPhase,
   PushUpCounter,
   PushUpCounterOptions,
@@ -14,51 +11,27 @@ import type {
 export type { PoseLandmarkName, Point, PoseLandmark, PoseFrame, PushUpPhase } from './types.ts';
 export type { PushUpCounterOptions, SquatCounterOptions, PushUpCounterResult, PushUpCounter } from './types.ts';
 
-type RequiredSide = {
-  shoulder: PoseLandmark;
-  elbow: PoseLandmark;
-  wrist: PoseLandmark;
-  hip: PoseLandmark;
-};
-
-type RequiredLegSide = {
-  hip: PoseLandmark;
-  knee: PoseLandmark;
-  ankle: PoseLandmark;
-};
-
 const DEFAULT_TARGET_COUNT = 5;
 const DEFAULT_MIN_CONFIDENCE = 0.55;
-const DEFAULT_DOWN_ANGLE = 90;
-const DEFAULT_UP_ANGLE = 160;
 const DEFAULT_MIN_STABLE_FRAMES = 2;
-const SQUAT_CONFIDENT_DOWN_KNEE_ANGLE = 130;
-const SQUAT_MIN_HIP_SHIFT_RATIO = 0.08;
-const SQUAT_MAX_SCALE_CHANGE_RATIO = 0.35;
-const SQUAT_MAX_MISSED_FRAMES = 4;
-const SQUAT_DOWN_COUNT_COOLDOWN_MS = 900;
-const SQUAT_STANDING_UNLOCK_FRAMES = 2;
+const SQUAT_MAX_MISSED_FRAMES = 3;
 
-export function calculateAngle(a: Point, vertex: Point, c: Point): number {
+export function calculateAngle(a: { x: number; y: number }, vertex: { x: number; y: number }, c: { x: number; y: number }): number {
   const ab = { x: a.x - vertex.x, y: a.y - vertex.y };
   const cb = { x: c.x - vertex.x, y: c.y - vertex.y };
   const dot = ab.x * cb.x + ab.y * cb.y;
-  const abLength = Math.hypot(ab.x, ab.y);
-  const cbLength = Math.hypot(cb.x, cb.y);
-
-  if (abLength === 0 || cbLength === 0) {
-    return 0;
+  const length = Math.hypot(ab.x, ab.y) * Math.hypot(cb.x, cb.y);
+  if (length === 0) {
+    return 180;
   }
-
-  const cosine = clamp(dot / (abLength * cbLength), -1, 1);
-  return (Math.acos(cosine) * 180) / Math.PI;
+  return (Math.acos(Math.min(1, Math.max(-1, dot / length))) * 180) / Math.PI;
 }
 
 export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpCounter {
-  const targetCount = normalizeTargetCount(options.targetCount);
+  const targetCount = options.targetCount ?? DEFAULT_TARGET_COUNT;
   const minConfidence = options.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
-  const downAngle = options.downAngle ?? DEFAULT_DOWN_ANGLE;
-  const upAngle = options.upAngle ?? DEFAULT_UP_ANGLE;
+  const downAngle = options.downAngle ?? 90;
+  const upAngle = options.upAngle ?? 160;
   const minStableFrames = Math.max(1, Math.trunc(options.minStableFrames ?? DEFAULT_MIN_STABLE_FRAMES));
 
   let count = 0;
@@ -80,7 +53,6 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
   return {
     handleFrame(frame: PoseFrame): PushUpCounterResult {
       const side = getBestConfidentSide(frame, minConfidence);
-
       if (!side) {
         phase = 'waiting_for_body';
         lastElbowAngle = null;
@@ -90,8 +62,7 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
       }
 
       lastElbowAngle = calculateAngle(side.shoulder, side.elbow, side.wrist);
-      const observedPose = classifyPose(lastElbowAngle, downAngle, upAngle);
-
+      const observedPose = classifyElbowPose(lastElbowAngle, downAngle, upAngle);
       if (!observedPose) {
         candidatePose = null;
         candidateFrames = 0;
@@ -113,7 +84,6 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
         if (phase === 'down') {
           count += 1;
         }
-
         phase = 'ready';
         return currentResult(true);
       }
@@ -136,208 +106,110 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
   };
 }
 
+/**
+ * Squat counter state machine.
+ *
+ * Count rule: a full cycle of STANDING → SQUATTING → STANDING must complete
+ * before a squat is counted.
+ *
+ * State transitions:
+ * waiting_for_body → (2+ stable standing frames) → standing_ready
+ * standing_ready → (2+ stable squatting frames) → down_confirmed
+ * down_confirmed → (2+ stable standing frames) → standing_ready, count += 1
+ *
+ * Short gaps (1-3 lost frames) keep current state.
+ * Long gaps reset to waiting_for_body.
+ */
 export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCounter {
-  const targetCount = normalizeTargetCount(options.targetCount);
+  const targetCount = options.targetCount ?? DEFAULT_TARGET_COUNT;
   const minConfidence = options.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
-  const minStableFrames = Math.max(1, Math.trunc(options.minStableFrames ?? 1));
+  const minStableFrames = Math.max(2, Math.trunc(options.minStableFrames ?? DEFAULT_MIN_STABLE_FRAMES));
+
+  type Phase = 'waiting_for_body' | 'standing_ready' | 'down_confirmed';
 
   let count = 0;
-  let phase: PushUpPhase = 'waiting_for_body';
+  let phase: Phase = 'waiting_for_body';
   let lastKneeAngle: number | null = null;
-  let candidatePose: 'up' | 'down' | null = null;
-  let candidateFrames = 0;
-  let standingHipY: number | null = null;
-  let standingPoseScale: number | null = null;
-  let lastDebugKey: string | null = null;
+  let currentPose: 'standing' | 'squatting' | null = null;
+  let currentPoseFrames = 0;
   let missedFrames = 0;
-  let lastCountedDownAtMs: number | null = null;
-  let waitingForStandingUnlock = false;
-  let stableStandingFrames = 0;
 
   function currentResult(isPoseReady: boolean): PushUpCounterResult {
     return {
       count,
-      phase,
+      phase: phase === 'waiting_for_body' ? 'waiting_for_body'
+        : phase === 'standing_ready' ? 'ready'
+        : 'down',
       isPoseReady,
       isComplete: count >= targetCount,
       elbowAngle: lastKneeAngle,
     };
   }
 
-  function rememberStandingBaseline(classification: SquatPoseClassification): void {
-    if (!classification.metrics) {
-      return;
-    }
-
-    standingHipY = classification.metrics.midHipY;
-    standingPoseScale = classification.metrics.poseScale;
-  }
-
-  function hasStableScale(classification: SquatPoseClassification): boolean {
-    if (!classification.metrics || standingPoseScale === null || standingPoseScale === 0) {
-      return true;
-    }
-
-    const scaleChangeRatio = Math.abs(classification.metrics.poseScale - standingPoseScale) / standingPoseScale;
-    return scaleChangeRatio <= SQUAT_MAX_SCALE_CHANGE_RATIO;
-  }
-
-  function canCountDownEpisode(frame: PoseFrame): boolean {
-    if (waitingForStandingUnlock) {
-      return false;
-    }
-    if (phase === 'down') {
-      return false;
-    }
-    if (lastCountedDownAtMs === null) {
-      return true;
-    }
-
-    return frame.timestampMs - lastCountedDownAtMs >= SQUAT_DOWN_COUNT_COOLDOWN_MS;
-  }
-
-  function getHipDropRatio(classification: SquatPoseClassification): number | null {
-    if (!classification.metrics || standingHipY === null || standingPoseScale === null || standingPoseScale === 0) {
+  function toObservedPose(classification: SquatPoseClassification): 'standing' | 'squatting' | null {
+    if (classification.label === 'unknown') {
       return null;
     }
-
-    return (classification.metrics.midHipY - standingHipY) / standingPoseScale;
-  }
-
-  function toObservedPose(classification: SquatPoseClassification): 'up' | 'down' | null {
     if (classification.label === 'standing') {
-      return 'up';
+      return 'standing';
     }
-
-    if (classification.label !== 'squatting') {
-      return null;
+    if (classification.label === 'squatting') {
+      return 'squatting';
     }
-
-    const hipDropRatio = getHipDropRatio(classification);
-    if (hipDropRatio === null) {
-      return 'down';
-    }
-
-    if (
-      Math.abs(hipDropRatio) >= SQUAT_MIN_HIP_SHIFT_RATIO
-      || (classification.metrics?.averageKneeAngle ?? 180) <= SQUAT_CONFIDENT_DOWN_KNEE_ANGLE
-    ) {
-      return 'down';
-    }
-
     return null;
-  }
-
-  function logDebug(frame: PoseFrame, classification: SquatPoseClassification, observedPose: 'up' | 'down' | null): void {
-    if (!isReactNativeRuntime()) {
-      return;
-    }
-
-    const metrics = classification.metrics;
-    const knee = metrics ? Math.round(metrics.averageKneeAngle) : null;
-    const hip = metrics ? Math.round(metrics.averageHipAngle) : null;
-    const hipDrop = getHipDropRatio(classification);
-    const debugKey = [
-      classification.qualityIssue,
-      classification.label,
-      observedPose ?? 'none',
-      phase,
-      count,
-      waitingForStandingUnlock ? 'locked' : 'unlocked',
-      knee,
-      hip,
-      hipDrop === null ? null : Math.round(hipDrop * 100),
-    ].join(':');
-
-    if (debugKey === lastDebugKey) {
-      return;
-    }
-
-    lastDebugKey = debugKey;
-    console.log(
-      [
-        '[WakeFitSquat]',
-        `t=${Math.round(frame.timestampMs)}`,
-        `quality=${classification.qualityIssue}`,
-        `label=${classification.label}`,
-        `observed=${observedPose ?? 'none'}`,
-        `phase=${phase}`,
-        `count=${count}`,
-        `lock=${waitingForStandingUnlock ? 'standing' : 'none'}`,
-        `confidence=${classification.confidence.toFixed(2)}`,
-        `knee=${knee ?? 'null'}`,
-        `hip=${hip ?? 'null'}`,
-        `hipDrop=${hipDrop === null ? 'null' : hipDrop.toFixed(2)}`,
-        `scale=${metrics ? Math.round(metrics.poseScale) : 'null'}`,
-        `image=${frame.imageWidth ?? 'unknown'}x${frame.imageHeight ?? 'unknown'}`,
-      ].join(' '),
-    );
   }
 
   return {
     handleFrame(frame: PoseFrame): PushUpCounterResult {
       const classification = classifySquatPoseFrame(frame, { minConfidence });
       lastKneeAngle = classification.metrics?.averageKneeAngle ?? null;
-      const observedPose = toObservedPose(classification);
 
       if (classification.qualityIssue !== 'ok') {
         missedFrames += 1;
         if (phase === 'waiting_for_body' || missedFrames > SQUAT_MAX_MISSED_FRAMES) {
           phase = 'waiting_for_body';
-          candidatePose = null;
-          candidateFrames = 0;
-          stableStandingFrames = 0;
-          standingHipY = null;
-          standingPoseScale = null;
+          currentPose = null;
+          currentPoseFrames = 0;
         }
-        logDebug(frame, classification, observedPose);
         return currentResult(false);
       }
 
       missedFrames = 0;
+      const observedPose = toObservedPose(classification);
 
       if (!observedPose) {
-        candidatePose = null;
-        candidateFrames = 0;
-        stableStandingFrames = 0;
-        logDebug(frame, classification, observedPose);
+        currentPose = null;
+        currentPoseFrames = 0;
         return currentResult(true);
       }
 
-      if (candidatePose === observedPose) {
-        candidateFrames += 1;
+      if (currentPose === observedPose) {
+        currentPoseFrames += 1;
       } else {
-        candidatePose = observedPose;
-        candidateFrames = 1;
+        currentPose = observedPose;
+        currentPoseFrames = 1;
       }
 
-      if (candidateFrames < minStableFrames) {
-        logDebug(frame, classification, observedPose);
+      if (currentPoseFrames < minStableFrames) {
         return currentResult(true);
       }
 
-      if (observedPose === 'up') {
-        phase = 'ready';
-        rememberStandingBaseline(classification);
-        stableStandingFrames += 1;
-        if (stableStandingFrames >= SQUAT_STANDING_UNLOCK_FRAMES) {
-          waitingForStandingUnlock = false;
-        }
-        logDebug(frame, classification, observedPose);
+      if (phase === 'waiting_for_body' && observedPose === 'standing') {
+        phase = 'standing_ready';
         return currentResult(true);
       }
 
-      if (phase !== 'down' && observedPose === 'down') {
-        if (canCountDownEpisode(frame)) {
-          count += 1;
-          lastCountedDownAtMs = frame.timestampMs;
-          waitingForStandingUnlock = true;
-        }
-        phase = 'down';
+      if (observedPose === 'squatting' && (phase === 'standing_ready' || phase === 'waiting_for_body')) {
+        phase = 'down_confirmed';
+        return currentResult(true);
       }
-      stableStandingFrames = 0;
 
-      logDebug(frame, classification, observedPose);
+      if (phase === 'down_confirmed' && observedPose === 'standing') {
+        count += 1;
+        phase = 'standing_ready';
+        return currentResult(true);
+      }
+
       return currentResult(true);
     },
 
@@ -345,140 +217,49 @@ export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCou
       count = 0;
       phase = 'waiting_for_body';
       lastKneeAngle = null;
-      candidatePose = null;
-      candidateFrames = 0;
-      standingHipY = null;
-      standingPoseScale = null;
-      lastDebugKey = null;
+      currentPose = null;
+      currentPoseFrames = 0;
       missedFrames = 0;
-      lastCountedDownAtMs = null;
-      waitingForStandingUnlock = false;
-      stableStandingFrames = 0;
       return currentResult(false);
     },
   };
 }
 
+type RequiredSide = {
+  shoulder: { x: number; y: number; confidence: number };
+  elbow: { x: number; y: number; confidence: number };
+  wrist: { x: number; y: number; confidence: number };
+  hip: { x: number; y: number; confidence: number };
+};
+
 function getBestConfidentSide(frame: PoseFrame, minConfidence: number): RequiredSide | null {
   const left = getConfidentSide(frame, 'left', minConfidence);
   const right = getConfidentSide(frame, 'right', minConfidence);
-
-  if (!left) {
-    return right;
-  }
-  if (!right) {
-    return left;
-  }
-
+  if (!left) return right;
+  if (!right) return left;
   return averageConfidence(right) > averageConfidence(left) ? right : left;
 }
 
-function getBestConfidentLegSide(frame: PoseFrame, minConfidence: number): RequiredLegSide | null {
-  const left = getConfidentLegSide(frame, 'left', minConfidence);
-  const right = getConfidentLegSide(frame, 'right', minConfidence);
-
-  if (!left) {
-    return right;
+function getConfidentSide(frame: PoseFrame, side: string, minConfidence: number): RequiredSide | null {
+  const byName = new Map<string, { x: number; y: number; confidence: number }>();
+  for (const item of frame.landmarks) {
+    byName.set(item.name, item);
   }
-  if (!right) {
-    return left;
-  }
-
-  return averageLegConfidence(right) > averageLegConfidence(left) ? right : left;
-}
-
-function getConfidentSide(
-  frame: PoseFrame,
-  side: 'left' | 'right',
-  minConfidence: number,
-): RequiredSide | null {
-  const byName = new Map(frame.landmarks.map((item) => [item.name, item]));
-  const shoulder = byName.get(`${side}Shoulder` as PoseLandmarkName);
-  const elbow = byName.get(`${side}Elbow` as PoseLandmarkName);
-  const wrist = byName.get(`${side}Wrist` as PoseLandmarkName);
-  const hip = byName.get(`${side}Hip` as PoseLandmarkName);
-
-  if (!shoulder || !elbow || !wrist || !hip) {
-    return null;
-  }
-
-  if ([shoulder, elbow, wrist, hip].some((item) => item.confidence < minConfidence)) {
-    return null;
-  }
-
+  const shoulder = byName.get(`${side}Shoulder`);
+  const elbow = byName.get(`${side}Elbow`);
+  const wrist = byName.get(`${side}Wrist`);
+  const hip = byName.get(`${side}Hip`);
+  if (!shoulder || !elbow || !wrist || !hip) return null;
+  if (shoulder.confidence < minConfidence || elbow.confidence < minConfidence || wrist.confidence < minConfidence || hip.confidence < minConfidence) return null;
   return { shoulder, elbow, wrist, hip };
-}
-
-function getConfidentLegSide(
-  frame: PoseFrame,
-  side: 'left' | 'right',
-  minConfidence: number,
-): RequiredLegSide | null {
-  const byName = new Map(frame.landmarks.map((item) => [item.name, item]));
-  const hip = byName.get(`${side}Hip` as PoseLandmarkName);
-  const knee = byName.get(`${side}Knee` as PoseLandmarkName);
-  const ankle = byName.get(`${side}Ankle` as PoseLandmarkName);
-
-  if (!hip || !knee || !ankle) {
-    return null;
-  }
-
-  if ([hip, knee, ankle].some((item) => item.confidence < minConfidence)) {
-    return null;
-  }
-
-  return { hip, knee, ankle };
 }
 
 function averageConfidence(side: RequiredSide): number {
   return (side.shoulder.confidence + side.elbow.confidence + side.wrist.confidence + side.hip.confidence) / 4;
 }
 
-function averageLegConfidence(side: RequiredLegSide): number {
-  return (side.hip.confidence + side.knee.confidence + side.ankle.confidence) / 3;
-}
-
-type LegMetrics = {
-  kneeAngle: number;
-  hipY: number;
-  legLength: number;
-};
-
-function getLegMetrics(side: RequiredLegSide): LegMetrics {
-  return {
-    kneeAngle: calculateAngle(side.hip, side.knee, side.ankle),
-    hipY: side.hip.y,
-    legLength: distance(side.hip, side.knee) + distance(side.knee, side.ankle),
-  };
-}
-
-function distance(a: Point, b: Point): number {
-  return Math.hypot(a.x - b.x, a.y - b.y);
-}
-
-function classifyPose(angle: number, downAngle: number, upAngle: number): 'up' | 'down' | null {
-  if (angle >= upAngle) {
-    return 'up';
-  }
-  if (angle < downAngle) {
-    return 'down';
-  }
-
+function classifyElbowPose(angle: number, downAngle: number, upAngle: number): 'up' | 'down' | null {
+  if (angle >= upAngle) return 'up';
+  if (angle < downAngle) return 'down';
   return null;
-}
-
-function normalizeTargetCount(value: number | undefined): number {
-  if (value === undefined || !Number.isFinite(value)) {
-    return DEFAULT_TARGET_COUNT;
-  }
-
-  return clamp(Math.trunc(value), 1, 100);
-}
-
-function isReactNativeRuntime(): boolean {
-  return (globalThis as { navigator?: { product?: string } }).navigator?.product === 'ReactNative';
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
 }

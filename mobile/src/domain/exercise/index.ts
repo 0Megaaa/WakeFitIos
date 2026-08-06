@@ -20,3 +20,6 @@ export type {
   SquatPoseClassification,
   SquatPoseClassifierOptions,
 } from './squatPoseClassifier.ts';
+
+export { evaluatePoseQuality } from './poseQuality.ts';
+export type { PoseQualityIssue, PoseQualityMetrics, PoseQualityResult } from './poseQuality.ts';
