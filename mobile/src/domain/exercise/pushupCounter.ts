@@ -1,4 +1,4 @@
-import { classifySquatPoseFrame, type SquatPoseClassification } from './squatPoseClassifier.ts';
+import { classifySquatPoseFrame, THRESHOLDS, type SquatPoseClassification } from './squatPoseClassifier.ts';
 import type {
   PoseFrame,
   PushUpPhase,
@@ -15,6 +15,7 @@ const DEFAULT_TARGET_COUNT = 5;
 const DEFAULT_MIN_CONFIDENCE = 0.55;
 const DEFAULT_MIN_STABLE_FRAMES = 2;
 const SQUAT_MAX_MISSED_FRAMES = 3;
+const BASELINE_SAMPLE_COUNT = 3;
 
 export function calculateAngle(a: { x: number; y: number }, vertex: { x: number; y: number }, c: { x: number; y: number }): number {
   const ab = { x: a.x - vertex.x, y: a.y - vertex.y };
@@ -105,7 +106,6 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
     },
 
     resetTrackingStatePreservingCount(): PushUpCounterResult {
-      // Reset temporary tracking state but preserve the count
       phase = 'waiting_for_body';
       lastElbowAngle = null;
       candidatePose = null;
@@ -116,22 +116,14 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
 }
 
 /**
- * Squat counter state machine.
+ * Squat counter with real standing baseline tracking.
  *
- * Count rule: a full cycle of STANDING → SQUATTING → STANDING must complete
- * before a squat is counted.
+ * State machine:
+ * 1. waiting_for_body: waiting for person to appear
+ * 2. standing_ready: person is standing, baseline established
+ * 3. down_confirmed: person has gone down (squat detected)
  *
- * State transitions:
- * waiting_for_body → (2+ stable standing frames) → standing_ready
- * standing_ready → (2+ stable squatting frames) → down_confirmed
- * down_confirmed → (2+ stable standing frames) → standing_ready, count += 1
- *
- * Short gaps (1-3 lost frames) keep current state.
- * Long gaps reset to waiting_for_body.
- *
- * Camera switch: call resetTrackingStatePreservingCount() to clear temporary
- * tracking state (phase, currentPose, currentPoseFrames, missedFrames) but
- * preserve the count.
+ * A squat is counted when: standing_ready -> down_confirmed -> standing_ready
  */
 export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCounter {
   const targetCount = options.targetCount ?? DEFAULT_TARGET_COUNT;
@@ -147,6 +139,27 @@ export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCou
   let currentPoseFrames = 0;
   let missedFrames = 0;
 
+  // Standing baseline tracking - rolling average of recent standing frames
+  let baselineHipYSamples: number[] = [];
+  let baselineScaleSamples: number[] = [];
+
+  function getBaselineHipY(): number | null {
+    if (baselineHipYSamples.length === 0) return null;
+    return baselineHipYSamples.reduce((a, b) => a + b, 0) / baselineHipYSamples.length;
+  }
+
+  function getBaselineScale(): number | null {
+    if (baselineScaleSamples.length === 0) return null;
+    return baselineScaleSamples.reduce((a, b) => a + b, 0) / baselineScaleSamples.length;
+  }
+
+  function updateBaseline(midHipY: number, poseScale: number): void {
+    baselineHipYSamples.push(midHipY);
+    baselineScaleSamples.push(poseScale);
+    if (baselineHipYSamples.length > BASELINE_SAMPLE_COUNT) baselineHipYSamples.shift();
+    if (baselineScaleSamples.length > BASELINE_SAMPLE_COUNT) baselineScaleSamples.shift();
+  }
+
   function currentResult(isPoseReady: boolean): PushUpCounterResult {
     return {
       count,
@@ -159,67 +172,128 @@ export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCou
     };
   }
 
-  function toObservedPose(classification: SquatPoseClassification): 'standing' | 'squatting' | null {
-    if (classification.label === 'unknown') {
-      return null;
+  function classifyPose(frame: PoseFrame, baselineHipY: number | null, baselineScale: number | null): {
+    label: 'standing' | 'squatting' | 'unknown';
+    metrics: { midHipY: number; poseScale: number; averageKneeAngle: number } | null;
+  } {
+    const result = classifySquatPoseFrame(frame, {
+      minConfidence,
+      standingBaselineHipY: baselineHipY ?? undefined,
+      standingBaselineScale: baselineScale ?? undefined,
+    });
+
+    return {
+      label: result.label,
+      metrics: result.metrics ? {
+        midHipY: result.metrics.midHipY,
+        poseScale: result.metrics.poseScale,
+        averageKneeAngle: result.metrics.averageKneeAngle,
+      } : null,
+    };
+  }
+
+  function detectSquatWithBaseline(frame: PoseFrame, baselineHipY: number, baselineScale: number): boolean {
+    const result = classifySquatPoseFrame(frame, {
+      minConfidence,
+      standingBaselineHipY: baselineHipY,
+      standingBaselineScale: baselineScale,
+    });
+
+    // Check if squat conditions are met
+    if (result.metrics && result.qualityIssue === 'ok') {
+      const { midHipY, poseScale, averageKneeAngle, hipDropRatio, scaleChangeRatio } = result.metrics;
+
+      // Must have significant hip drop
+      if (hipDropRatio >= THRESHOLDS.MIN_HIP_DROP_RATIO &&
+          // Must not have excessive scale change (camera movement)
+          scaleChangeRatio <= THRESHOLDS.MAX_SCALE_CHANGE_RATIO &&
+          // Must have clear knee bend
+          averageKneeAngle <= THRESHOLDS.KNEE_DOWN_PARTIAL) {
+        return true;
+      }
     }
-    if (classification.label === 'standing') {
-      return 'standing';
-    }
-    if (classification.label === 'squatting') {
-      return 'squatting';
-    }
-    return null;
+    return false;
   }
 
   return {
     handleFrame(frame: PoseFrame): PushUpCounterResult {
-      const classification = classifySquatPoseFrame(frame, { minConfidence });
-      lastKneeAngle = classification.metrics?.averageKneeAngle ?? null;
+      // Classify the frame
+      const baselineHipY = getBaselineHipY();
+      const baselineScale = getBaselineScale();
+      const result = classifyPose(frame, baselineHipY, baselineScale);
 
-      if (classification.qualityIssue !== 'ok') {
+      lastKneeAngle = result.metrics?.averageKneeAngle ?? null;
+
+      if (result.label === 'unknown' || !result.metrics) {
+        // Poor quality frame
         missedFrames += 1;
         if (phase === 'waiting_for_body' || missedFrames > SQUAT_MAX_MISSED_FRAMES) {
           phase = 'waiting_for_body';
           currentPose = null;
           currentPoseFrames = 0;
+          baselineHipYSamples = [];
+          baselineScaleSamples = [];
         }
         return currentResult(false);
       }
 
       missedFrames = 0;
-      const observedPose = toObservedPose(classification);
+      const { midHipY, poseScale } = result.metrics;
 
-      if (!observedPose) {
-        currentPose = null;
-        currentPoseFrames = 0;
+      // Update baseline with standing frames
+      if (result.label === 'standing') {
+        updateBaseline(midHipY, poseScale);
+      }
+
+      // waiting_for_body: look for standing to establish baseline
+      if (phase === 'waiting_for_body') {
+        if (result.label === 'standing') {
+          // Keep tracking standing until we have enough samples
+          if (currentPose === 'standing') {
+            currentPoseFrames += 1;
+          } else {
+            currentPose = 'standing';
+            currentPoseFrames = 1;
+          }
+
+          // Move to standing_ready when we have baseline samples
+          if (baselineHipYSamples.length >= 2) {
+            phase = 'standing_ready';
+            currentPose = null;
+            currentPoseFrames = 0;
+          }
+        }
         return currentResult(true);
       }
 
-      if (currentPose === observedPose) {
+      // standing_ready or down_confirmed
+      // First check if this is squatting using baseline
+      const isSquatting = baselineHipY !== null && baselineScale !== null
+        && detectSquatWithBaseline(frame, baselineHipY, baselineScale);
+
+      const detectedPose: 'standing' | 'squatting' = isSquatting ? 'squatting' : 'standing';
+
+      // Track pose consistency
+      if (currentPose === detectedPose) {
         currentPoseFrames += 1;
       } else {
-        currentPose = observedPose;
+        currentPose = detectedPose;
         currentPoseFrames = 1;
       }
 
+      // Need stable frames before transitioning
       if (currentPoseFrames < minStableFrames) {
         return currentResult(true);
       }
 
-      if (phase === 'waiting_for_body' && observedPose === 'standing') {
-        phase = 'standing_ready';
-        return currentResult(true);
-      }
-
-      // Only allow standing_ready → down_confirmed
-      // User must first achieve stable standing before a squat can be counted
-      if (observedPose === 'squatting' && phase === 'standing_ready') {
+      // standing_ready -> down_confirmed
+      if (phase === 'standing_ready' && detectedPose === 'squatting') {
         phase = 'down_confirmed';
         return currentResult(true);
       }
 
-      if (phase === 'down_confirmed' && observedPose === 'standing') {
+      // down_confirmed -> standing_ready, count += 1
+      if (phase === 'down_confirmed' && detectedPose === 'standing') {
         count += 1;
         phase = 'standing_ready';
         return currentResult(true);
@@ -235,16 +309,19 @@ export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCou
       currentPose = null;
       currentPoseFrames = 0;
       missedFrames = 0;
+      baselineHipYSamples = [];
+      baselineScaleSamples = [];
       return currentResult(false);
     },
 
     resetTrackingStatePreservingCount(): PushUpCounterResult {
-      // Reset temporary tracking state but preserve the count
       phase = 'waiting_for_body';
       lastKneeAngle = null;
       currentPose = null;
       currentPoseFrames = 0;
       missedFrames = 0;
+      baselineHipYSamples = [];
+      baselineScaleSamples = [];
       return currentResult(false);
     },
   };

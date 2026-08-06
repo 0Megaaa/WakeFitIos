@@ -41,12 +41,10 @@ function squatFrame(
   timestampMs: number,
   confidence = 0.95,
 ): PoseFrame {
-  // Create proper straight leg for standing and deep squat for squatting
+  // Create proper standing and deep squat fixtures
   const lowerBody = pose === 'standing'
     ? {
-        // Nearly straight line: hip (150, 240), knee (150, 400), ankle (150, 560)
-        // Shoulder above hip at (150, 100)
-        // Standing knee angle should be ~175-180° (nearly straight)
+        // Standing: straight line hip(150,240) → knee(150,400) → ankle(150,560)
         leftHip: { x: 150, y: 240 },
         rightHip: { x: 150, y: 240 },
         leftKnee: { x: 150, y: 400 },
@@ -55,13 +53,13 @@ function squatFrame(
         rightAnkle: { x: 150, y: 560 },
       }
     : {
-        // Deep squat: knee significantly forward of hip
-        // Knee at x=30 (much left of hip), ankle stays at x=150
-        // Hip angle ~100-110° (< 120° threshold = deep squat)
-        leftHip: { x: 150, y: 270 },
-        rightHip: { x: 150, y: 270 },
-        leftKnee: { x: 30, y: 390 },
-        rightKnee: { x: 270, y: 390 },
+        // Squat: knee very forward, hip lower
+        // Must have averageKneeAngle < 140 (strictly) to pass classifier
+        // Use knees at x=0/300 (very forward) for clear squat
+        leftHip: { x: 150, y: 300 },
+        rightHip: { x: 150, y: 300 },
+        leftKnee: { x: 0, y: 400 },
+        rightKnee: { x: 300, y: 400 },
         leftAnkle: { x: 150, y: 560 },
         rightAnkle: { x: 150, y: 560 },
       };
@@ -74,9 +72,9 @@ function squatFrame(
     source: 'apple-vision',
     coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
-      // Center the body - shoulders at x=150 (same x as hips/knees/ankles)
-      landmark('leftShoulder', 140, 100, confidence),
-      landmark('rightShoulder', 160, 100, confidence),
+      // Standing: shoulders at y=100, Squat: shoulders at y=160 (drop with hip)
+      landmark('leftShoulder', 140, pose === 'standing' ? 100 : 160, confidence),
+      landmark('rightShoulder', 160, pose === 'standing' ? 100 : 160, confidence),
       landmark('leftHip', lowerBody.leftHip.x, lowerBody.leftHip.y, confidence),
       landmark('rightHip', lowerBody.rightHip.x, lowerBody.rightHip.y, confidence),
       landmark('leftKnee', lowerBody.leftKnee.x, lowerBody.leftKnee.y, confidence),
@@ -97,12 +95,19 @@ function driveOneStablePushUp(flow: ReturnType<typeof createChallengeFlow>) {
 }
 
 function driveOneStableSquat(flow: ReturnType<typeof createChallengeFlow>) {
+  // Need 3 stable standing frames to establish baseline
   flow.handlePoseFrame(squatFrame('standing', 1000));
   flow.handlePoseFrame(squatFrame('standing', 1100));
+  flow.handlePoseFrame(squatFrame('standing', 1200));
+  // Squat (3 frames for stable)
   flow.handlePoseFrame(squatFrame('squatting', 2000));
   flow.handlePoseFrame(squatFrame('squatting', 2100));
+  flow.handlePoseFrame(squatFrame('squatting', 2200));
+  // Return to standing (4 frames for stable)
   flow.handlePoseFrame(squatFrame('standing', 3000));
-  return flow.handlePoseFrame(squatFrame('standing', 3100));
+  flow.handlePoseFrame(squatFrame('standing', 3100));
+  flow.handlePoseFrame(squatFrame('standing', 3200));
+  return flow.handlePoseFrame(squatFrame('standing', 3300));
 }
 
 function jsonResponse(body: unknown, status = 200) {
@@ -266,8 +271,8 @@ describe('challenge flow state', () => {
     flow.beginChallenge();
     const completed = driveOneStableSquat(flow);
 
+    assert.equal(completed.count, 1, `count should be 1 but got ${completed.count}, status=${completed.status}`);
     assert.equal(completed.status, 'completed');
-    assert.equal(completed.count, 1);
     assert.equal(completed.workout?.exerciseType, 'squat');
     assert.equal(completed.workout?.actualCount, 1);
   });

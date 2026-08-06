@@ -7,7 +7,6 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PointF
 import android.view.View
-import kotlin.math.max
 
 data class WakeFitPosePoint(
   val name: String,
@@ -19,11 +18,13 @@ data class WakeFitPosePoint(
 /**
  * Pose overlay view for displaying skeleton overlay on camera preview.
  *
- * Receives canonical upright-top-left-unmirrored coordinates (from ML Kit via InputImage rotation).
- * Transforms to view coordinates using CameraX official transformation matrix.
+ * Receives canonical upright-top-left-unmirrored coordinates (from ML Kit).
+ * Transforms to view coordinates using CameraX transformation Matrix.
  *
- * Key: canonical coordinates are already upright, so NO rotation is needed.
- * The transformation matrix handles aspect-fill scaling and front camera mirroring.
+ * Coordinate pipeline:
+ * - ML Kit provides points in canonical upright-top-left-unmirrored space
+ * - Matrix transforms to view coordinates
+ * - Front camera mirroring is handled by CameraX transformation
  */
 class WakeFitPoseOverlayView(context: Context) : View(context) {
   private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -45,31 +46,22 @@ class WakeFitPoseOverlayView(context: Context) : View(context) {
     alpha = 220
   }
 
-  // Canonical upright coordinates (from ML Kit after InputImage rotation)
+  // Canonical upright coordinates
   private var points: Map<String, WakeFitPosePoint> = emptyMap()
-  private var imageWidth = 0
-  private var imageHeight = 0
   // Transformation matrix from canonical coordinates to view coordinates
   private var transformMatrix: Matrix = Matrix()
-  private var transformValues: FloatArray = FloatArray(9) { if (it == 0 || it == 4 || it == 8) 1f else 0f }
 
   fun updatePose(
     nextPoints: List<WakeFitPosePoint>,
-    nextImageWidth: Int,
-    nextImageHeight: Int,
-    overlayTransform: FloatArray,
-    frontCamera: Boolean,
+    matrix: Matrix,
   ) {
     // Filter by confidence threshold
     points = nextPoints
       .filter { it.confidence >= CONFIDENCE_THRESHOLD }
       .associateBy { it.name }
-    imageWidth = nextImageWidth
-    imageHeight = nextImageHeight
 
-    // Use CameraX official transformation
-    transformValues = overlayTransform
-    transformMatrix = Matrix().apply { setValues(overlayTransform) }
+    // Use the CameraX transformation matrix directly
+    transformMatrix = matrix
 
     invalidate()
   }
@@ -81,7 +73,7 @@ class WakeFitPoseOverlayView(context: Context) : View(context) {
 
   override fun onDraw(canvas: Canvas) {
     super.onDraw(canvas)
-    if (width <= 0 || height <= 0 || imageWidth <= 0 || imageHeight <= 0 || points.isEmpty()) {
+    if (width <= 0 || height <= 0 || points.isEmpty() || transformMatrix.isIdentity) {
       return
     }
 
@@ -104,23 +96,22 @@ class WakeFitPoseOverlayView(context: Context) : View(context) {
   }
 
   /**
-   * Transform canonical upright coordinates to view coordinates using transformation matrix.
+   * Transform canonical coordinates to view coordinates using Matrix.
+   *
+   * Android Matrix applies transformation as:
+   * [x']   [m00 m01 m02]   [x]
+   * [y'] = [m10 m11 m12] * [y]
+   * [1  ]   [m20 m21 m22]   [1]
+   *
+   * Using mapPoints: floatArrayOf(x, y) -> {x', y'}
    */
   private fun toViewPoint(point: WakeFitPosePoint): PointF {
-    val values = transformValues
-
-    // Apply 3x3 transformation matrix
-    // Matrix maps: [x, y, 1] → [x', y', 1]
-    // x' = m[0]*x + m[3]*y + m[6]
-    // y' = m[1]*x + m[4]*y + m[7]
-    val viewX = values[0] * point.x + values[3] * point.y + values[6]
-    val viewY = values[1] * point.x + values[4] * point.y + values[7]
-
-    return PointF(viewX, viewY)
+    val floatCoords = floatArrayOf(point.x, point.y)
+    transformMatrix.mapPoints(floatCoords)
+    return PointF(floatCoords[0], floatCoords[1])
   }
 
   companion object {
-    // Threshold: 0.55 for consistent quality across platforms
     private const val CONFIDENCE_THRESHOLD = 0.55f
 
     private val SKELETON_LINES = listOf(

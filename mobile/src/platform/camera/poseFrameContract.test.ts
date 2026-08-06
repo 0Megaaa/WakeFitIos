@@ -46,6 +46,7 @@ function completeSquatEvent(overrides: Partial<NativePoseFrameEvent> = {}): Nati
 
 /**
  * Helper to create a complete standing pose frame for counter testing.
+ * Standing baseline for squat: hip at y=240, torso size ~140px
  */
 function completeStandingEvent(timestampMs: number, overrides: Partial<NativePoseFrameEvent> = {}): NativePoseFrameEvent {
   return {
@@ -56,14 +57,15 @@ function completeStandingEvent(timestampMs: number, overrides: Partial<NativePos
     source: 'apple-vision',
     coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
+      // Standing: straight body, knees aligned with hips
       { name: 'leftShoulder', x: 150, y: 80, confidence: 0.95 },
       { name: 'rightShoulder', x: 490, y: 80, confidence: 0.95 },
-      { name: 'leftHip', x: 160, y: 280, confidence: 0.95 },
-      { name: 'rightHip', x: 480, y: 280, confidence: 0.95 },
-      { name: 'leftKnee', x: 165, y: 380, confidence: 0.95 },
-      { name: 'rightKnee', x: 475, y: 380, confidence: 0.95 },
-      { name: 'leftAnkle', x: 170, y: 460, confidence: 0.95 },
-      { name: 'rightAnkle', x: 470, y: 460, confidence: 0.95 },
+      { name: 'leftHip', x: 150, y: 220, confidence: 0.95 },
+      { name: 'rightHip', x: 490, y: 220, confidence: 0.95 },
+      { name: 'leftKnee', x: 150, y: 350, confidence: 0.95 },
+      { name: 'rightKnee', x: 490, y: 350, confidence: 0.95 },
+      { name: 'leftAnkle', x: 150, y: 440, confidence: 0.95 },
+      { name: 'rightAnkle', x: 490, y: 440, confidence: 0.95 },
     ],
     ...overrides,
   };
@@ -72,6 +74,11 @@ function completeStandingEvent(timestampMs: number, overrides: Partial<NativePos
 /**
  * Helper to create a complete squat pose frame for counter testing.
  * Uses knee angles that definitely trigger squatting classification.
+ */
+/**
+ * Squatting event with proper geometry.
+ * Standing torso = 140px, so squat torso should also be ~140px.
+ * For 640x480, use ~280px torso (2x scale).
  */
 function completeSquattingEvent(timestampMs: number, overrides: Partial<NativePoseFrameEvent> = {}): NativePoseFrameEvent {
   return {
@@ -82,17 +89,18 @@ function completeSquattingEvent(timestampMs: number, overrides: Partial<NativePo
     source: 'apple-vision',
     coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
-      // Deep squat fixture for 640x480
-      // Hip at y=300, knee forward at x=70/570, ankle at y=460
-      // Hip angle ~100-110° (< 120° threshold = deep squat)
-      { name: 'leftShoulder', x: 140, y: 80, confidence: 0.95 },
-      { name: 'rightShoulder', x: 160, y: 80, confidence: 0.95 },
-      { name: 'leftHip', x: 150, y: 300, confidence: 0.95 },
-      { name: 'rightHip', x: 490, y: 300, confidence: 0.95 },
-      { name: 'leftKnee', x: 70, y: 390, confidence: 0.95 },
-      { name: 'rightKnee', x: 570, y: 390, confidence: 0.95 },
-      { name: 'leftAnkle', x: 150, y: 460, confidence: 0.95 },
-      { name: 'rightAnkle', x: 490, y: 460, confidence: 0.95 },
+      // Squat: shoulder drops with hip, knees very forward
+      // Standing hip at y=220, so squat hip at y=400 (torso stays ~280px)
+      // Standing shoulder at y=80, so squat shoulder at y=260 (torso 140px * 2 = 280px)
+      { name: 'leftShoulder', x: 150, y: 260, confidence: 0.95 },
+      { name: 'rightShoulder', x: 490, y: 260, confidence: 0.95 },
+      { name: 'leftHip', x: 150, y: 400, confidence: 0.95 },
+      { name: 'rightHip', x: 490, y: 400, confidence: 0.95 },
+      // Knee very forward
+      { name: 'leftKnee', x: 100, y: 350, confidence: 0.95 },
+      { name: 'rightKnee', x: 540, y: 350, confidence: 0.95 },
+      { name: 'leftAnkle', x: 150, y: 450, confidence: 0.95 },
+      { name: 'rightAnkle', x: 490, y: 450, confidence: 0.95 },
     ],
     ...overrides,
   };
@@ -151,51 +159,56 @@ describe('PoseFrame contract consistency', () => {
     });
 
     describe('landmark validation', () => {
-      it('rejects landmarks with x > imageWidth', () => {
+      it('discards individual invalid points but returns frame with remaining valid points', () => {
+        // One invalid point + 7 valid points = frame should be non-null with 7 landmarks
         const event = completeSquatEvent({
           landmarks: [
-            { name: 'leftShoulder', x: 700, y: 80, confidence: 0.9 }, // x > 640
-            { name: 'rightShoulder', x: 490, y: 80, confidence: 0.9 },
-            { name: 'leftHip', x: 160, y: 280, confidence: 0.85 },
-            { name: 'rightHip', x: 480, y: 280, confidence: 0.85 },
-            { name: 'leftKnee', x: 165, y: 380, confidence: 0.8 },
-            { name: 'rightKnee', x: 475, y: 380, confidence: 0.8 },
-            { name: 'leftAnkle', x: 170, y: 460, confidence: 0.75 },
-            { name: 'rightAnkle', x: 470, y: 460, confidence: 0.75 },
+            { name: 'leftShoulder', x: 700, y: 80, confidence: 0.9 }, // x > imageWidth = invalid
+            { name: 'rightShoulder', x: 490, y: 80, confidence: 0.9 }, // valid
+            { name: 'leftHip', x: 160, y: 280, confidence: 0.85 }, // valid
+            { name: 'rightHip', x: 480, y: 280, confidence: 0.85 }, // valid
+            { name: 'leftKnee', x: 165, y: 380, confidence: 0.8 }, // valid
+            { name: 'rightKnee', x: 475, y: 380, confidence: 0.8 }, // valid
+            { name: 'leftAnkle', x: 170, y: 460, confidence: 0.75 }, // valid
+            { name: 'rightAnkle', x: 470, y: 460, confidence: 0.75 }, // valid
           ],
         });
         const frame = nativePoseEventToFrame(event);
-        assert.equal(frame, null, 'x > imageWidth should return null');
+        assert.ok(frame, 'frame should not be null - invalid point filtered, 7 remain');
+        assert.equal(frame.landmarks.length, 7, 'invalid point should be filtered');
+        assert.ok(frame.landmarks.some((l) => l.name === 'rightShoulder'), 'rightShoulder should remain');
+        assert.ok(!frame.landmarks.some((l) => l.name === 'leftShoulder'), 'leftShoulder should be filtered');
       });
 
-      it('rejects landmarks with y > imageHeight', () => {
+      it('discards y > imageHeight points but returns frame', () => {
         const event = completeSquatEvent({
           landmarks: [
-            { name: 'leftShoulder', x: 150, y: 500, confidence: 0.9 }, // y > 480
-            { name: 'rightShoulder', x: 490, y: 80, confidence: 0.9 },
-            { name: 'leftHip', x: 160, y: 280, confidence: 0.85 },
-            { name: 'rightHip', x: 480, y: 280, confidence: 0.85 },
-            { name: 'leftKnee', x: 165, y: 380, confidence: 0.8 },
-            { name: 'rightKnee', x: 475, y: 380, confidence: 0.8 },
-            { name: 'leftAnkle', x: 170, y: 460, confidence: 0.75 },
-            { name: 'rightAnkle', x: 470, y: 460, confidence: 0.75 },
+            { name: 'leftShoulder', x: 150, y: 500, confidence: 0.9 }, // y > 480 = invalid
+            { name: 'rightShoulder', x: 490, y: 80, confidence: 0.9 }, // valid
+            { name: 'leftHip', x: 160, y: 280, confidence: 0.85 }, // valid
+            { name: 'rightHip', x: 480, y: 280, confidence: 0.85 }, // valid
+            { name: 'leftKnee', x: 165, y: 380, confidence: 0.8 }, // valid
+            { name: 'rightKnee', x: 475, y: 380, confidence: 0.8 }, // valid
+            { name: 'leftAnkle', x: 170, y: 460, confidence: 0.75 }, // valid
+            { name: 'rightAnkle', x: 470, y: 460, confidence: 0.75 }, // valid
           ],
         });
         const frame = nativePoseEventToFrame(event);
-        assert.equal(frame, null, 'y > imageHeight should return null');
+        assert.ok(frame, 'frame should not be null - invalid point filtered');
+        assert.equal(frame.landmarks.length, 7, 'invalid point should be filtered');
       });
 
-      it('rejects landmarks with negative x', () => {
+      it('discards negative x points but returns frame', () => {
         const event = completeSquatEvent({
           landmarks: [
-            { name: 'leftShoulder', x: -10, y: 80, confidence: 0.9 },
-            { name: 'rightShoulder', x: 490, y: 80, confidence: 0.9 },
-            { name: 'leftHip', x: 160, y: 280, confidence: 0.85 },
-            { name: 'rightHip', x: 480, y: 280, confidence: 0.85 },
-            { name: 'leftKnee', x: 165, y: 380, confidence: 0.8 },
-            { name: 'rightKnee', x: 475, y: 380, confidence: 0.8 },
-            { name: 'leftAnkle', x: 170, y: 460, confidence: 0.75 },
-            { name: 'rightAnkle', x: 470, y: 460, confidence: 0.75 },
+            { name: 'leftShoulder', x: -10, y: 80, confidence: 0.9 }, // negative = invalid
+            { name: 'rightShoulder', x: 490, y: 80, confidence: 0.9 }, // valid
+            { name: 'leftHip', x: 160, y: 280, confidence: 0.85 }, // valid
+            { name: 'rightHip', x: 480, y: 280, confidence: 0.85 }, // valid
+            { name: 'leftKnee', x: 165, y: 380, confidence: 0.8 }, // valid
+            { name: 'rightKnee', x: 475, y: 380, confidence: 0.8 }, // valid
+            { name: 'leftAnkle', x: 170, y: 460, confidence: 0.75 }, // valid
+            { name: 'rightAnkle', x: 470, y: 460, confidence: 0.75 }, // valid
           ],
         });
         const frame = nativePoseEventToFrame(event);
@@ -219,38 +232,40 @@ describe('PoseFrame contract consistency', () => {
         assert.equal(frame, null, 'negative y should return null');
       });
 
-      it('rejects landmarks with confidence < 0', () => {
+      it('discards confidence < 0 points but returns frame', () => {
         const event = completeSquatEvent({
           landmarks: [
-            { name: 'leftShoulder', x: 150, y: 80, confidence: -0.1 },
-            { name: 'rightShoulder', x: 490, y: 80, confidence: 0.9 },
-            { name: 'leftHip', x: 160, y: 280, confidence: 0.85 },
-            { name: 'rightHip', x: 480, y: 280, confidence: 0.85 },
-            { name: 'leftKnee', x: 165, y: 380, confidence: 0.8 },
-            { name: 'rightKnee', x: 475, y: 380, confidence: 0.8 },
-            { name: 'leftAnkle', x: 170, y: 460, confidence: 0.75 },
-            { name: 'rightAnkle', x: 470, y: 460, confidence: 0.75 },
+            { name: 'leftShoulder', x: 150, y: 80, confidence: -0.1 }, // invalid
+            { name: 'rightShoulder', x: 490, y: 80, confidence: 0.9 }, // valid
+            { name: 'leftHip', x: 160, y: 280, confidence: 0.85 }, // valid
+            { name: 'rightHip', x: 480, y: 280, confidence: 0.85 }, // valid
+            { name: 'leftKnee', x: 165, y: 380, confidence: 0.8 }, // valid
+            { name: 'rightKnee', x: 475, y: 380, confidence: 0.8 }, // valid
+            { name: 'leftAnkle', x: 170, y: 460, confidence: 0.75 }, // valid
+            { name: 'rightAnkle', x: 470, y: 460, confidence: 0.75 }, // valid
           ],
         });
         const frame = nativePoseEventToFrame(event);
-        assert.equal(frame, null, 'confidence < 0 should return null');
+        assert.ok(frame, 'frame should not be null - invalid point filtered');
+        assert.equal(frame.landmarks.length, 7, 'invalid point should be filtered');
       });
 
-      it('rejects landmarks with confidence > 1', () => {
+      it('discards confidence > 1 points but returns frame', () => {
         const event = completeSquatEvent({
           landmarks: [
-            { name: 'leftShoulder', x: 150, y: 80, confidence: 1.5 },
-            { name: 'rightShoulder', x: 490, y: 80, confidence: 0.9 },
-            { name: 'leftHip', x: 160, y: 280, confidence: 0.85 },
-            { name: 'rightHip', x: 480, y: 280, confidence: 0.85 },
-            { name: 'leftKnee', x: 165, y: 380, confidence: 0.8 },
-            { name: 'rightKnee', x: 475, y: 380, confidence: 0.8 },
-            { name: 'leftAnkle', x: 170, y: 460, confidence: 0.75 },
-            { name: 'rightAnkle', x: 470, y: 460, confidence: 0.75 },
+            { name: 'leftShoulder', x: 150, y: 80, confidence: 1.5 }, // invalid
+            { name: 'rightShoulder', x: 490, y: 80, confidence: 0.9 }, // valid
+            { name: 'leftHip', x: 160, y: 280, confidence: 0.85 }, // valid
+            { name: 'rightHip', x: 480, y: 280, confidence: 0.85 }, // valid
+            { name: 'leftKnee', x: 165, y: 380, confidence: 0.8 }, // valid
+            { name: 'rightKnee', x: 475, y: 380, confidence: 0.8 }, // valid
+            { name: 'leftAnkle', x: 170, y: 460, confidence: 0.75 }, // valid
+            { name: 'rightAnkle', x: 470, y: 460, confidence: 0.75 }, // valid
           ],
         });
         const frame = nativePoseEventToFrame(event);
-        assert.equal(frame, null, 'confidence > 1 should return null');
+        assert.ok(frame, 'frame should not be null - invalid point filtered');
+        assert.equal(frame.landmarks.length, 7, 'invalid point should be filtered');
       });
 
       it('returns null when no valid landmarks remain after filtering', () => {
