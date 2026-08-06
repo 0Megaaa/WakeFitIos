@@ -74,8 +74,13 @@ export function nativePoseEventToFrame(event: NativePoseFrameEvent): PoseFrame |
       const y = Number(item.y);
       const confidence = item.confidence ?? item.inFrameConfidence ?? 0;
 
-      // Must have finite coordinates
+      // Must have finite coordinates and confidence
       if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(confidence)) {
+        return null;
+      }
+
+      // Confidence must be in valid range [0, 1]
+      if (confidence < 0 || confidence > 1) {
         return null;
       }
 

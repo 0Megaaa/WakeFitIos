@@ -577,17 +577,22 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
   }, [platform.permissionService, platform.poseCamera.supported, realCameraEnabled]);
 
   const toggleCameraFacing = useCallback(() => {
+    // Reset counter tracking state before switching camera
+    // This clears down/standing state but preserves the count
+    if (flow) {
+      flow.resetTrackingStatePreservingCount();
+    }
+
     setCameraFacing((prev) => {
       const next = prev === 'front' ? 'back' : 'front';
       setStatus(next === 'back' ? '已切换至后置摄像头' : '已切换至前置摄像头');
       return next;
     });
-    // Reset temporary tracking state when switching cameras
-    // Count is preserved by the counter, but down state is cleared
+    // Reset UI state
     setPoseQualityIssue('ok');
     setPoseGuidance('');
     lastPoseQualityIssueRef.current = 'ok';
-  }, []);
+  }, [flow]);
 
   const handleRealPoseFrame = useCallback((frame: PoseFrame) => {
     if (!flow) {

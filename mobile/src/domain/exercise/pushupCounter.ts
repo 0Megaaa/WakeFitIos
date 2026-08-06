@@ -103,6 +103,15 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
       candidateFrames = 0;
       return currentResult(false);
     },
+
+    resetTrackingStatePreservingCount(): PushUpCounterResult {
+      // Reset temporary tracking state but preserve the count
+      phase = 'waiting_for_body';
+      lastElbowAngle = null;
+      candidatePose = null;
+      candidateFrames = 0;
+      return currentResult(false);
+    },
   };
 }
 
@@ -119,6 +128,10 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
  *
  * Short gaps (1-3 lost frames) keep current state.
  * Long gaps reset to waiting_for_body.
+ *
+ * Camera switch: call resetTrackingStatePreservingCount() to clear temporary
+ * tracking state (phase, currentPose, currentPoseFrames, missedFrames) but
+ * preserve the count.
  */
 export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCounter {
   const targetCount = options.targetCount ?? DEFAULT_TARGET_COUNT;
@@ -217,6 +230,16 @@ export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCou
 
     reset(): PushUpCounterResult {
       count = 0;
+      phase = 'waiting_for_body';
+      lastKneeAngle = null;
+      currentPose = null;
+      currentPoseFrames = 0;
+      missedFrames = 0;
+      return currentResult(false);
+    },
+
+    resetTrackingStatePreservingCount(): PushUpCounterResult {
+      // Reset temporary tracking state but preserve the count
       phase = 'waiting_for_body';
       lastKneeAngle = null;
       currentPose = null;

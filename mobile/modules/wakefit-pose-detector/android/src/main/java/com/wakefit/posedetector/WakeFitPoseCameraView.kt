@@ -2,6 +2,7 @@ package com.wakefit.posedetector
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Matrix
 import android.util.Log
 import android.util.Size
 import android.view.Surface
@@ -10,6 +11,7 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.TransformMetadata
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -26,18 +28,21 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * Android Pose Camera implementation.
+ * Android Pose Camera implementation using CameraX and ML Kit.
  *
  * Coordinate pipeline:
- * 1. ImageProxy provides pixel buffer with rotationDegrees
+ * 1. ImageProxy provides pixel buffer with rotationDegrees and cropRect
  * 2. InputImage.fromMediaImage(mediaImage, rotationDegrees) tells ML Kit to process rotated image
- * 3. ML Kit returns pixel coordinates in the rotated image space
- * 4. We transform to upright-top-left-unmirrored (canonical) for JS
- * 5. PreviewView handles its own display transformation
+ * 3. ML Kit returns pixel coordinates in the rotated (canonical upright) image space
+ * 4. We emit canonical PoseFrame to JS (upright-top-left-unmirrored)
+ * 5. We compute PreviewView transformation for overlay using CameraX official API
  *
- * ML Kit landmark positions are in pixel coordinates of the processed image.
- * InputImage.withRotation() rotates the image before detection, so coordinates
- * are relative to the rotated (canonical upright) image space.
+ * Key design decisions:
+ * - ML Kit landmark positions are in pixel coordinates of the rotated image
+ * - InputImage.withRotationDegrees() rotates before detection, so coordinates
+ *   are relative to the rotated (canonical upright) image space
+ * - PreviewView.outputTransform provides official CameraX transformation matrix
+ * - Overlay uses PreviewView transformation for accurate display positioning
  */
 class WakeFitPoseCameraView(
   context: android.content.Context,
@@ -57,8 +62,8 @@ class WakeFitPoseCameraView(
   private var cameraStartToken = 0
   private var cameraFacingValue = "front"
 
-  // Frame processing state
-  private var processingFrame = false
+  // Frame processing state - token-bound to prevent stale frame processing
+  private var processingToken = -1
   private var loggedFirstFrame = false
   private var loggedFirstPose = false
 
@@ -69,7 +74,7 @@ class WakeFitPoseCameraView(
     set(value) {
       // Normalize to front/back
       val normalized = if (value == "back") "back" else "front"
-      if (field == normalized) return  // No change
+      if (field == normalized) return // No change
       field = normalized
       cameraFacingValue = normalized
       if (isAttachedToWindow) {
@@ -113,6 +118,7 @@ class WakeFitPoseCameraView(
 
   override fun onDetachedFromWindow() {
     stopCamera()
+    releaseResources()
     super.onDetachedFromWindow()
   }
 
@@ -153,6 +159,14 @@ class WakeFitPoseCameraView(
       {
         try {
           val provider = cameraProviderFuture.get()
+
+          // Check if requested camera is available
+          val selector = getCameraSelector()
+          if (!provider.hasCamera(selector)) {
+            emitCameraError("CAMERA_FACING_NOT_AVAILABLE")
+            return
+          }
+
           bindCameraUseCases(provider, lifecycleOwner, startToken)
         } catch (error: Exception) {
           emitCameraError(error.message ?: "CAMERA_START_FAILED")
@@ -218,14 +232,20 @@ class WakeFitPoseCameraView(
   }
 
   private fun stopCamera() {
-    processingFrame = false
-    cameraStartToken += 1  // Invalidate any pending frames
+    processingToken = -1
+    cameraStartToken += 1 // Invalidate any pending frames
     loggedFirstFrame = false
     loggedFirstPose = false
     cameraProvider?.unbindAll()
     cameraProvider = null
     poseOverlayView.clearPose()
     Log.i(TAG, "camera stopped token=${cameraStartToken}")
+  }
+
+  private fun releaseResources() {
+    analysisExecutor.shutdown()
+    detector.close()
+    Log.i(TAG, "resources released")
   }
 
   /**
@@ -242,20 +262,24 @@ class WakeFitPoseCameraView(
 
     if (!loggedFirstFrame) {
       loggedFirstFrame = true
-      Log.i(TAG, "first analysis frame ${imageProxy.width}x${imageProxy.height} rotation=${imageProxy.imageInfo.rotationDegrees}")
+      Log.i(TAG, "first analysis frame " +
+        "rawWidth=${imageProxy.width} rawHeight=${imageProxy.height} " +
+        "rotation=${imageProxy.imageInfo.rotationDegrees} " +
+        "cropRect=${imageProxy.cropRect} " +
+        "facing=$cameraFacingValue")
     }
 
-    if (processingFrame) {
+    if (processingToken == bindToken) {
       imageProxy.close()
       return
     }
 
-    processingFrame = true
+    processingToken = bindToken
 
     @androidx.camera.core.ExperimentalGetImage
     val mediaImage = imageProxy.image
     if (mediaImage == null) {
-      processingFrame = false
+      processingToken = -1
       imageProxy.close()
       return
     }
@@ -265,22 +289,31 @@ class WakeFitPoseCameraView(
     val rotationDegrees = imageProxy.imageInfo.rotationDegrees
     val inputImage = InputImage.fromMediaImage(mediaImage, rotationDegrees)
 
+    // Capture frame metadata for overlay transformation
+    val frameWidth = imageProxy.width
+    val frameHeight = imageProxy.height
+    val cropRect = imageProxy.cropRect
+    val isFrontCamera = cameraFacingValue == "front"
+
     detector.process(inputImage)
       .addOnSuccessListener { pose ->
         // Check token again after async detection
-        if (bindToken != cameraStartToken) {
+        if (processingToken != bindToken || bindToken != cameraStartToken) {
           Log.i(TAG, "discard stale detection token=$bindToken current=$cameraStartToken")
           return@addOnSuccessListener
         }
-        emitPoseFrame(pose, imageProxy.width, imageProxy.height, rotationDegrees, cameraFacingValue)
+        if (!isAttachedToWindow) {
+          return@addOnSuccessListener
+        }
+        emitPoseFrame(pose, frameWidth, frameHeight, rotationDegrees, cropRect, isFrontCamera, imageProxy)
       }
       .addOnFailureListener { error ->
-        if (bindToken == cameraStartToken) {
+        if (processingToken == bindToken && bindToken == cameraStartToken && isAttachedToWindow) {
           emitCameraError(error.message ?: "POSE_DETECTION_FAILED")
         }
       }
       .addOnCompleteListener {
-        processingFrame = false
+        processingToken = -1
         imageProxy.close()
       }
   }
@@ -288,56 +321,143 @@ class WakeFitPoseCameraView(
   /**
    * Emit pose data to JS and update overlay.
    *
-   * @param pose ML Kit detection result (already in rotated image coordinates)
+   * @param pose ML Kit detection result
    * @param sourceWidth Raw ImageProxy width
    * @param sourceHeight Raw ImageProxy height
    * @param rotationDegrees ImageProxy rotation
-   * @param facing Current camera facing
+   * @param cropRect ImageProxy crop rect
+   * @param isFrontCamera Whether front camera is active
+   * @param imageProxy The image proxy for coordinate transformation
    */
   private fun emitPoseFrame(
     pose: Pose,
     sourceWidth: Int,
     sourceHeight: Int,
     rotationDegrees: Int,
-    facing: String,
+    cropRect: android.graphics.Rect,
+    isFrontCamera: Boolean,
+    imageProxy: ImageProxy,
   ) {
     // ML Kit coordinates are already in rotated (upright) space due to InputImage.withRotationDegrees
     // Calculate upright dimensions
     val (uprightWidth, uprightHeight) = getUprightDimensions(sourceWidth, sourceHeight, rotationDegrees)
 
-    // Collect landmarks in canonical upright-top-left-unmirrored space
-    // ML Kit already applied rotation, so coordinates are relative to rotated image
-    val landmarks = collectCanonicalPosePoints(pose, uprightWidth, uprightHeight)
+    // Collect all 12 landmarks in canonical upright-top-left-unmirrored space
+    val landmarks = collectAllPosePoints(pose, uprightWidth, uprightHeight)
 
     if (!loggedFirstPose && landmarks.isNotEmpty()) {
       loggedFirstPose = true
       Log.i(TAG, "first pose landmarks=${landmarks.size} canonical=${uprightWidth}x${uprightHeight}")
     }
 
+    // Compute overlay coordinates using CameraX official transformation
+    val overlayTransform = computeOverlayTransform(
+      imageProxy,
+      uprightWidth,
+      uprightHeight,
+      isFrontCamera,
+    )
+
     // Update overlay with canonical coordinates and PreviewView transformation
-    // PreviewView handles its own display transformation
     poseOverlayView.post {
       poseOverlayView.updatePose(
         landmarks,
         uprightWidth,
         uprightHeight,
-        rotationDegrees,
-        facing == "front",
+        overlayTransform,
+        isFrontCamera,
       )
     }
 
-    // Emit canonical PoseFrame to JS
+    // Emit canonical PoseFrame to JS (no mirroring in JS)
     onPoseFrame(
       mapOf(
         "timestampMs" to System.currentTimeMillis().toDouble(),
         "imageWidth" to uprightWidth,
         "imageHeight" to uprightHeight,
         "landmarks" to landmarks.map { toEventLandmark(it) },
-        "cameraFacing" to facing,
+        "cameraFacing" to cameraFacingValue,
         "source" to "mlkit",
         "coordinateSpace" to "upright-top-left-unmirrored",
       ),
     )
+  }
+
+  /**
+   * Compute transformation matrix for overlay using CameraX official API.
+   *
+   * This uses PreviewView.outputTransform which provides the official CameraX
+   * transformation from analysis image coordinates to view coordinates.
+   *
+   * The transformation accounts for:
+   * - ImageProxy rotationDegrees
+   * - ImageProxy cropRect
+   * - PreviewView scale type (AspectFill)
+   * - Front camera mirroring
+   */
+  private fun computeOverlayTransform(
+    imageProxy: ImageProxy,
+    canonicalWidth: Int,
+    canonicalHeight: Int,
+    isFrontCamera: Boolean,
+  ): FloatArray {
+    // Get the PreviewView transformation matrix
+    val viewTransform = previewView.outputTransform
+
+    if (viewTransform != null && !viewTransform.isIdentity) {
+      // Use CameraX official transformation
+      // This matrix maps from analysis image coordinates to view coordinates
+      return viewTransform
+    }
+
+    // Fallback: manual calculation if PreviewView transform is not available
+    return computeManualTransform(
+      imageProxy,
+      canonicalWidth,
+      canonicalHeight,
+      isFrontCamera,
+    )
+  }
+
+  /**
+   * Manual fallback transformation calculation.
+   * Used when PreviewView.outputTransform is not available.
+   */
+  private fun computeManualTransform(
+    imageProxy: ImageProxy,
+    canonicalWidth: Int,
+    canonicalHeight: Int,
+    isFrontCamera: Boolean,
+  ): FloatArray {
+    val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+    val cropRect = imageProxy.cropRect
+
+    // Build transformation matrix
+    val matrix = Matrix()
+
+    // 1. Apply crop offset (translate to crop region)
+    matrix.postTranslate(-cropRect.left.toFloat(), -cropRect.top.toFloat())
+
+    // 2. Apply rotation for upright orientation
+    when (rotationDegrees) {
+      90 -> matrix.postRotate(90f, cropRect.width() / 2f, cropRect.height() / 2f)
+      180 -> matrix.postRotate(180f)
+      270 -> matrix.postRotate(270f, cropRect.width() / 2f, cropRect.height() / 2f)
+    }
+
+    // 3. Scale to canonical dimensions
+    val scaleX = canonicalWidth.toFloat() / cropRect.width()
+    val scaleY = canonicalHeight.toFloat() / cropRect.height()
+    matrix.postScale(scaleX, scaleY)
+
+    // 4. Mirror for front camera (to match PreviewView display)
+    if (isFrontCamera) {
+      matrix.postScale(-1f, 1f, canonicalWidth / 2f, canonicalHeight / 2f)
+    }
+
+    val values = FloatArray(9)
+    matrix.getValues(values)
+    return values
   }
 
   /**
@@ -346,13 +466,13 @@ class WakeFitPoseCameraView(
    */
   private fun getUprightDimensions(sourceWidth: Int, sourceHeight: Int, rotationDegrees: Int): Pair<Int, Int> {
     return when (rotationDegrees) {
-      90, 270 -> Pair(sourceHeight, sourceWidth)  // Rotated: swap dimensions
-      else -> Pair(sourceWidth, sourceHeight)       // 0 or 180: keep as-is
+      90, 270 -> Pair(sourceHeight, sourceWidth) // Rotated: swap dimensions
+      else -> Pair(sourceWidth, sourceHeight)     // 0 or 180: keep as-is
     }
   }
 
   /**
-   * Collect pose landmarks in canonical upright-top-left-unmirrored pixel coordinates.
+   * Collect ALL 12 pose landmarks in canonical upright-top-left-unmirrored pixel coordinates.
    *
    * ML Kit landmarks are in pixel coordinates of the rotated image (due to InputImage rotation).
    * For canonical upright-top-left-unmirrored:
@@ -362,10 +482,15 @@ class WakeFitPoseCameraView(
    * - Portrait orientation (height > width typically)
    * - NO mirroring for front camera
    */
-  private fun collectCanonicalPosePoints(pose: Pose, imageWidth: Int, imageHeight: Int): List<WakeFitPosePoint> {
+  private fun collectAllPosePoints(pose: Pose, imageWidth: Int, imageHeight: Int): List<WakeFitPosePoint> {
+    // All 12 key landmarks for both squat and push-up recognition
     val requiredTypes = listOf(
       PoseLandmark.LEFT_SHOULDER to "leftShoulder",
       PoseLandmark.RIGHT_SHOULDER to "rightShoulder",
+      PoseLandmark.LEFT_ELBOW to "leftElbow",
+      PoseLandmark.RIGHT_ELBOW to "rightElbow",
+      PoseLandmark.LEFT_WRIST to "leftWrist",
+      PoseLandmark.RIGHT_WRIST to "rightWrist",
       PoseLandmark.LEFT_HIP to "leftHip",
       PoseLandmark.RIGHT_HIP to "rightHip",
       PoseLandmark.LEFT_KNEE to "leftKnee",

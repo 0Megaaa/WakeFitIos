@@ -20,12 +20,12 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
 
   private let sessionQueue = DispatchQueue(label: "wakefit.camera.session")
   private let visionQueue = DispatchQueue(label: "wakefit.camera.vision")
-  private let videoOutput = AVCaptureVideoDataOutput()
   private let overlayView = WakeFitPoseOverlayView()
   private let confidenceThreshold: Float32 = 0.55
 
-  // Camera lifecycle state
+  // Camera lifecycle state - all tracked together
   private var captureSession: AVCaptureSession?
+  private var videoOutput: AVCaptureVideoDataOutput?
   private var previewLayer: AVCaptureVideoPreviewLayer?
   private var cameraGeneration: Int = 0
   private var cameraFacingValue: String = "front"
@@ -108,20 +108,37 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
       guard let self else { return }
 
       do {
-        let session = try self.configureSession(facing: requestedFacing)
+        let session = try self.configureSession(facing: requestedFacing, generation: generation)
+        // Re-verify state before assigning
+        guard self.cameraGeneration == generation,
+              self.isAttached,
+              self.cameraFacingValue == requestedFacing else {
+          NSLog("WakeFitCamera abort session: state changed during config")
+          return
+        }
+
         self.captureSession = session
+        self.videoOutput = session.outputs.first as? AVCaptureVideoDataOutput
 
         if !session.isRunning {
           session.startRunning()
         }
 
+        // Verify again before installing preview
+        guard self.cameraGeneration == generation,
+              self.isAttached,
+              self.captureSession === session else {
+          NSLog("WakeFitCamera abort preview: state changed after start")
+          session.stopRunning()
+          return
+        }
+
         DispatchQueue.main.async {
-          guard self.cameraGeneration == generation, self.isAttached else { return }
           self.installPreviewLayer()
         }
       } catch {
-        DispatchQueue.main.async {
-          guard self.cameraGeneration == generation else { return }
+        DispatchQueue.main.async { [weak self] in
+          guard let self, self.cameraGeneration == generation else { return }
           self.emitCameraError(error.localizedDescription)
         }
       }
@@ -133,7 +150,9 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
     cameraGeneration = generation
 
     let session = captureSession
+    let output = videoOutput
     captureSession = nil
+    videoOutput = nil
     isProcessingFrame = false
     loggedFirstFrame = false
     loggedFirstPose = false
@@ -153,7 +172,7 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
     NSLog("WakeFitCamera stopped generation=%d", generation)
   }
 
-  private func configureSession(facing: String) throws -> AVCaptureSession {
+  private func configureSession(facing: String, generation: Int) throws -> AVCaptureSession {
     let session = AVCaptureSession()
 
     session.beginConfiguration()
@@ -231,11 +250,19 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
     }
   }
 
+  // MARK: - AVCaptureVideoDataOutputSampleBufferDelegate
+
   public func captureOutput(
     _ output: AVCaptureOutput,
     didOutput sampleBuffer: CMSampleBuffer,
     from connection: AVCaptureConnection
   ) {
+    // Verify this frame comes from the current active output
+    guard output === videoOutput else {
+      NSLog("WakeFitCamera discard frame from old output")
+      return
+    }
+
     if isProcessingFrame {
       return
     }
@@ -257,12 +284,14 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
       return
     }
 
+    // Capture state at this moment for validation after async detection
     let currentGeneration = cameraGeneration
     let currentFacing = activeFacing
     let currentSession = captureSession
+    let currentOutput = videoOutput
 
     isProcessingFrame = true
-    detectPose(in: pixelBuffer, generation: currentGeneration, facing: currentFacing, session: currentSession)
+    detectPose(in: pixelBuffer, generation: currentGeneration, facing: currentFacing, session: currentSession, output: currentOutput)
   }
 
   @available(iOS 14.0, *)
@@ -270,7 +299,8 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
     in pixelBuffer: CVPixelBuffer,
     generation: Int,
     facing: String,
-    session: AVCaptureSession?
+    session: AVCaptureSession?,
+    output: AVCaptureVideoDataOutput?
   ) {
     let request = VNDetectHumanBodyPoseRequest()
     let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
@@ -278,19 +308,23 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
     do {
       try handler.perform([request])
 
+      // Validate: generation, session, facing, output must still match
       guard cameraGeneration == generation,
             captureSession === session,
+            videoOutput === output,
             activeFacing == facing,
             isAttached,
             captureSession != nil else {
-        NSLog("WakeFitCamera discard stale Vision result gen=%d current=%d", generation, cameraGeneration)
+        NSLog("WakeFitCamera discard stale Vision result gen=%d current=%d facing=%@ active=%@",
+              generation, cameraGeneration, facing, activeFacing)
         isProcessingFrame = false
         return
       }
 
       guard let observation = request.results?.first else {
         DispatchQueue.main.async { [weak self] in
-          self?.overlayView.clearPose()
+          guard let self, self.cameraGeneration == generation else { return }
+          self.overlayView.clearPose()
         }
         isProcessingFrame = false
         return
@@ -308,7 +342,10 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
       let isMirrored = facing != "back"
 
       DispatchQueue.main.async { [weak self] in
-        guard let self, self.cameraGeneration == generation else { return }
+        guard let self,
+              self.cameraGeneration == generation,
+              self.activeFacing == facing,
+              self.captureSession === session else { return }
 
         self.overlayView.updatePose(
           points: points,
@@ -344,14 +381,16 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
   ) throws -> [WakeFitPosePoint] {
     let recognizedPoints = try observation.recognizedPoints(.all)
     return jointMappings.compactMap { mapping in
-      guard let point = recognizedPoints[mapping.joint], point.confidence > self.confidenceThreshold else {
+      // Keep all points with confidence, let downstream decide what to do with low confidence
+      guard let point = recognizedPoints[mapping.joint] else {
         return nil
       }
 
       let imageWidth = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
       let imageHeight = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
 
-      // Vision: normalized [0,1], origin bottom-left → convert to upright-top-left pixel coords
+      // Vision coordinates: normalized [0,1] with origin at bottom-left
+      // Transform to upright-top-left-unmirrored pixel coordinates
       let x = point.location.x * imageWidth
       let y = (1 - point.location.y) * imageHeight
 

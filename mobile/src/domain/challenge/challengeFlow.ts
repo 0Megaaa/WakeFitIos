@@ -81,6 +81,15 @@ export function createChallengeFlow(options: ChallengeFlowOptions) {
       return snapshot();
     },
 
+    /**
+     * Reset temporary tracking state when switching cameras.
+     * Preserves count so previous reps are not lost.
+     */
+    resetTrackingStatePreservingCount(): ChallengeSnapshot {
+      counter.resetTrackingStatePreservingCount();
+      return snapshot();
+    },
+
     reset(): ChallengeSnapshot {
       counter.reset();
       status = 'idle';

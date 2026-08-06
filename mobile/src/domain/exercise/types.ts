@@ -82,4 +82,7 @@ export type PushUpCounterResult = {
 export type PushUpCounter = {
   handleFrame(frame: PoseFrame): PushUpCounterResult;
   reset(): PushUpCounterResult;
+  /** Reset temporary tracking state but preserve the count.
+   * Used when switching cameras to clear down/standing state. */
+  resetTrackingStatePreservingCount(): PushUpCounterResult;
 };

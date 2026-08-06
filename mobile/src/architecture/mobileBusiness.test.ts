@@ -41,23 +41,29 @@ function squatFrame(
   timestampMs: number,
   confidence = 0.95,
 ): PoseFrame {
+  // Create proper straight leg for standing and deep squat for squatting
   const lowerBody = pose === 'standing'
     ? {
-        leftHip: { x: 110, y: 240 },
-        rightHip: { x: 190, y: 240 },
-        leftKnee: { x: 115, y: 400 },
-        rightKnee: { x: 185, y: 400 },
-        leftAnkle: { x: 120, y: 560 },
-        rightAnkle: { x: 180, y: 560 },
+        // Nearly straight line: hip (150, 240), knee (150, 400), ankle (150, 560)
+        // Shoulder above hip at (150, 100)
+        // Standing knee angle should be ~175-180° (nearly straight)
+        leftHip: { x: 150, y: 240 },
+        rightHip: { x: 150, y: 240 },
+        leftKnee: { x: 150, y: 400 },
+        rightKnee: { x: 150, y: 400 },
+        leftAnkle: { x: 150, y: 560 },
+        rightAnkle: { x: 150, y: 560 },
       }
     : {
-        // Squatting: knees significantly forward with hip drop
-        leftHip: { x: 115, y: 280 },
-        rightHip: { x: 185, y: 280 },
-        leftKnee: { x: 60, y: 440 },
-        rightKnee: { x: 240, y: 440 },
-        leftAnkle: { x: 120, y: 560 },
-        rightAnkle: { x: 180, y: 560 },
+        // Deep squat: knee significantly forward of hip
+        // Knee at x=30 (much left of hip), ankle stays at x=150
+        // Hip angle ~100-110° (< 120° threshold = deep squat)
+        leftHip: { x: 150, y: 270 },
+        rightHip: { x: 150, y: 270 },
+        leftKnee: { x: 30, y: 390 },
+        rightKnee: { x: 270, y: 390 },
+        leftAnkle: { x: 150, y: 560 },
+        rightAnkle: { x: 150, y: 560 },
       };
 
   return {
@@ -68,8 +74,9 @@ function squatFrame(
     source: 'apple-vision',
     coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
-      landmark('leftShoulder', 90, pose === 'standing' ? 100 : 110, confidence),
-      landmark('rightShoulder', 210, pose === 'standing' ? 100 : 110, confidence),
+      // Center the body - shoulders at x=150 (same x as hips/knees/ankles)
+      landmark('leftShoulder', 140, 100, confidence),
+      landmark('rightShoulder', 160, 100, confidence),
       landmark('leftHip', lowerBody.leftHip.x, lowerBody.leftHip.y, confidence),
       landmark('rightHip', lowerBody.rightHip.x, lowerBody.rightHip.y, confidence),
       landmark('leftKnee', lowerBody.leftKnee.x, lowerBody.leftKnee.y, confidence),
