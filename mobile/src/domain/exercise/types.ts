@@ -34,25 +34,29 @@ export type PoseLandmark = Point & {
  * - Upright portrait orientation
  * - NOT mirrored even on front camera
  *
- * cameraFacing: which physical camera was used
- * source: which ML framework produced the data
- * coordinateSpace: always 'upright-top-left-unmirrored'
+ * Required fields:
+ * - imageWidth/imageHeight: dimensions of the canonical image space
+ * - cameraFacing: which physical camera was used (front/back)
+ * - source: which ML framework produced the data (apple-vision/mlkit)
+ * - coordinateSpace: always 'upright-top-left-unmirrored'
  */
 export type PoseFrame = {
   timestampMs: number;
-  imageWidth?: number;
-  imageHeight?: number;
+  /** Image width in canonical coordinate space */
+  imageWidth: number;
+  /** Image height in canonical coordinate space */
+  imageHeight: number;
   landmarks: PoseLandmark[];
   /** Which camera lens was used to capture this frame */
-  cameraFacing?: 'front' | 'back';
+  cameraFacing: 'front' | 'back';
   /** Which ML framework produced this pose data */
-  source?: 'apple-vision' | 'mlkit';
+  source: 'apple-vision' | 'mlkit';
   /**
    * Coordinate space of landmark coordinates.
    * Always 'upright-top-left-unmirrored'.
    * Left/right landmarks refer to the test subject's left/right, not screen left/right.
    */
-  coordinateSpace?: 'upright-top-left-unmirrored';
+  coordinateSpace: 'upright-top-left-unmirrored';
 };
 
 export type PushUpPhase = 'waiting_for_body' | 'ready' | 'down';

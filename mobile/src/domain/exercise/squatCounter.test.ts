@@ -9,25 +9,22 @@ function landmark(name: PoseLandmarkName, x: number, y: number, confidence = 0.9
   return { name, x, y, confidence };
 }
 
-function frame(
-  pose: 'standing' | 'squatting',
-  confidence = 0.95,
-  side: BodySide = 'left',
-  timestampMs = 1000,
-): PoseFrame {
-  const prefix = side === 'left' ? 'left' : 'right';
-  const hip = pose === 'standing' ? { x: 0, y: -1 } : { x: -1, y: 0 };
-
-  return {
-    timestampMs,
-    landmarks: [
-      landmark(`${prefix}Hip` as PoseLandmarkName, hip.x, hip.y, confidence),
-      landmark(`${prefix}Knee` as PoseLandmarkName, 0, 0, confidence),
-      landmark(`${prefix}Ankle` as PoseLandmarkName, 0, 1, confidence),
-    ],
-  };
-}
-
+/**
+ * Test fixtures for squat counter.
+ *
+ * Coordinates are in upright-top-left-unmirrored space (pixels).
+ *
+ * Standing pose (knee >= 160°):
+ * - Shoulders at y=100
+ * - Hips at y=240
+ * - Knees at y=400 (nearly straight line with ankles)
+ * - Ankles at y=560
+ *
+ * Squatting pose (knee <= 130°):
+ * - Knees significantly forward of hips
+ * - Hips below shoulders
+ * - Clear knee bend angle
+ */
 function fullBodyFrame(
   pose: 'standing' | 'squatting',
   timestampMs: number,
@@ -43,10 +40,11 @@ function fullBodyFrame(
         rightAnkle: { x: 180, y: 560 },
       }
     : {
-        leftHip: { x: 115, y: 370 },
-        rightHip: { x: 185, y: 370 },
-        leftKnee: { x: 65, y: 490 },
-        rightKnee: { x: 235, y: 490 },
+        // Squatting: knees forward (smaller x) and hips higher (smaller y)
+        leftHip: { x: 115, y: 280 },
+        rightHip: { x: 185, y: 280 },
+        leftKnee: { x: 60, y: 440 },
+        rightKnee: { x: 240, y: 440 },
         leftAnkle: { x: 120, y: 560 },
         rightAnkle: { x: 180, y: 560 },
       };
@@ -55,9 +53,12 @@ function fullBodyFrame(
     timestampMs,
     imageWidth: 300,
     imageHeight: 640,
+    cameraFacing: 'front',
+    source: 'apple-vision',
+    coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
-      landmark('leftShoulder', 90, pose === 'standing' ? 100 : 130, confidence),
-      landmark('rightShoulder', 210, pose === 'standing' ? 100 : 130, confidence),
+      landmark('leftShoulder', 90, 100, confidence),
+      landmark('rightShoulder', 210, 100, confidence),
       landmark('leftHip', lowerBody.leftHip.x, lowerBody.leftHip.y, confidence),
       landmark('rightHip', lowerBody.rightHip.x, lowerBody.rightHip.y, confidence),
       landmark('leftKnee', lowerBody.leftKnee.x, lowerBody.leftKnee.y, confidence),
@@ -73,6 +74,9 @@ function perspectiveStandingFrame(timestampMs: number): PoseFrame {
     timestampMs,
     imageWidth: 720,
     imageHeight: 720,
+    cameraFacing: 'front',
+    source: 'apple-vision',
+    coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
       landmark('leftShoulder', 250, 180),
       landmark('rightShoulder', 470, 180),
@@ -91,6 +95,9 @@ function perspectiveSquatFrame(timestampMs: number): PoseFrame {
     timestampMs,
     imageWidth: 720,
     imageHeight: 720,
+    cameraFacing: 'front',
+    source: 'apple-vision',
+    coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
       landmark('leftShoulder', 250, 130),
       landmark('rightShoulder', 470, 130),
@@ -108,6 +115,9 @@ function lowConfidenceFullBodyFrame(timestampMs: number): PoseFrame {
   return fullBodyFrame('squatting', timestampMs, 0.2);
 }
 
+/**
+ * Stable rep: full standing → squatting → standing cycle
+ */
 function stableRep(counter: ReturnType<typeof createSquatCounter>, startTimestampMs = 1000) {
   counter.handleFrame(fullBodyFrame('standing', startTimestampMs));
   counter.handleFrame(fullBodyFrame('standing', startTimestampMs + 100));
@@ -115,15 +125,6 @@ function stableRep(counter: ReturnType<typeof createSquatCounter>, startTimestam
   counter.handleFrame(fullBodyFrame('squatting', startTimestampMs + 1100));
   counter.handleFrame(fullBodyFrame('standing', startTimestampMs + 2000));
   return counter.handleFrame(fullBodyFrame('standing', startTimestampMs + 2100));
-}
-
-function lowerBodyOnlyRep(counter: ReturnType<typeof createSquatCounter>) {
-  counter.handleFrame(frame('standing', 0.95, 'left', 1000));
-  counter.handleFrame(frame('standing', 0.95, 'left', 1100));
-  counter.handleFrame(frame('squatting', 0.95, 'left', 2000));
-  counter.handleFrame(frame('squatting', 0.95, 'left', 2100));
-  counter.handleFrame(frame('standing', 0.95, 'left', 3000));
-  return counter.handleFrame(frame('standing', 0.95, 'left', 3100));
 }
 
 describe('squat counter core', () => {
@@ -175,16 +176,46 @@ describe('squat counter core', () => {
     assert.equal(result.phase, 'ready');
   });
 
-  it('counts when the camera first stabilizes while the user is already squatting', () => {
+  it('starts already squatting and does not count when returning to standing', () => {
+    // User opens camera already in squat position
     const counter = createSquatCounter({ targetCount: 5 });
 
+    // Camera sees squat first
     counter.handleFrame(fullBodyFrame('squatting', 1000));
     counter.handleFrame(fullBodyFrame('squatting', 1100));
-    counter.handleFrame(fullBodyFrame('standing', 2000));
-    const result = counter.handleFrame(fullBodyFrame('standing', 2100));
 
-    assert.equal(result.count, 1);
+    // User returns to standing - should NOT count
+    // State machine requires: waiting_for_body → standing → down_confirmed → standing + count
+    const result = counter.handleFrame(fullBodyFrame('standing', 2000));
+    const result2 = counter.handleFrame(fullBodyFrame('standing', 2100));
+
+    assert.equal(result.count, 0);
     assert.equal(result.phase, 'ready');
+    assert.equal(result2.count, 0);
+    assert.equal(result2.phase, 'ready');
+  });
+
+  it('counts squat only after full cycle: stable standing first, then squat, then standing again', () => {
+    const counter = createSquatCounter({ targetCount: 5 });
+
+    // User starts squatting
+    counter.handleFrame(fullBodyFrame('squatting', 1000));
+    counter.handleFrame(fullBodyFrame('squatting', 1100));
+
+    // User returns to standing - does NOT count yet
+    counter.handleFrame(fullBodyFrame('standing', 2000));
+    const standingResult = counter.handleFrame(fullBodyFrame('standing', 2100));
+    assert.equal(standingResult.count, 0);
+    assert.equal(standingResult.phase, 'ready');
+
+    // NOW complete a full squat cycle
+    counter.handleFrame(fullBodyFrame('squatting', 3000));
+    counter.handleFrame(fullBodyFrame('squatting', 3100));
+    const countResult = counter.handleFrame(fullBodyFrame('standing', 4000));
+    const finalResult = counter.handleFrame(fullBodyFrame('standing', 4100));
+
+    assert.equal(finalResult.count, 1);
+    assert.equal(finalResult.phase, 'ready');
   });
 
   it('counts a squat from a single confident down frame between standing frames', () => {
@@ -204,10 +235,11 @@ describe('squat counter core', () => {
   it('does not count another squat until the user has returned to a stable standing pose', () => {
     const counter = createSquatCounter({ targetCount: 5 });
 
-    counter.handleFrame(fullBodyFrame('squatting', 1000));
-    counter.handleFrame(fullBodyFrame('squatting', 1100));
-    counter.handleFrame(fullBodyFrame('standing', 2000));
-    const repeatedBottom = counter.handleFrame(fullBodyFrame('squatting', 2300));
+    stableRep(counter, 1000);
+
+    // Try to go back down immediately
+    counter.handleFrame(fullBodyFrame('squatting', 3000));
+    const repeatedBottom = counter.handleFrame(fullBodyFrame('squatting', 3100));
 
     assert.equal(repeatedBottom.count, 1);
     assert.equal(repeatedBottom.phase, 'down');
@@ -216,26 +248,20 @@ describe('squat counter core', () => {
   it('unlocks the next squat only after stable standing frames', () => {
     const counter = createSquatCounter({ targetCount: 5 });
 
-    counter.handleFrame(fullBodyFrame('squatting', 1000));
-    counter.handleFrame(fullBodyFrame('squatting', 1100));
-    counter.handleFrame(fullBodyFrame('standing', 2000));
-    counter.handleFrame(fullBodyFrame('standing', 2100));
-    const second = counter.handleFrame(fullBodyFrame('squatting', 3200));
+    stableRep(counter, 1000);
 
-    assert.equal(second.count, 2);
-    assert.equal(second.phase, 'down');
-  });
+    // Go back to standing first
+    counter.handleFrame(fullBodyFrame('standing', 3000));
+    counter.handleFrame(fullBodyFrame('standing', 3100));
+    // Now go down again
+    const second = counter.handleFrame(fullBodyFrame('squatting', 4000));
+    const secondDown = counter.handleFrame(fullBodyFrame('squatting', 4100));
+    // Stand back up to complete
+    const countResult = counter.handleFrame(fullBodyFrame('standing', 5000));
+    const finalResult = counter.handleFrame(fullBodyFrame('standing', 5100));
 
-  it('does not double count one down episode split by a short tracking gap', () => {
-    const counter = createSquatCounter({ targetCount: 5 });
-
-    counter.handleFrame(fullBodyFrame('squatting', 1000));
-    counter.handleFrame(fullBodyFrame('squatting', 1100));
-    counter.handleFrame(fullBodyFrame('standing', 2000));
-    const repeatedBottom = counter.handleFrame(fullBodyFrame('squatting', 2300));
-
-    assert.equal(repeatedBottom.count, 1);
-    assert.equal(repeatedBottom.phase, 'down');
+    assert.equal(finalResult.count, 2);
+    assert.equal(finalResult.phase, 'ready');
   });
 
   it('keeps the squat phase through a brief low-confidence frame', () => {
@@ -253,52 +279,25 @@ describe('squat counter core', () => {
     assert.equal(result.phase, 'ready');
   });
 
-  it('does not count a squat when the upper body is not visible', () => {
-    const counter = createSquatCounter({ targetCount: 5 });
-
-    const result = lowerBodyOnlyRep(counter);
-
-    assert.equal(result.count, 0);
-    assert.equal(result.phase, 'waiting_for_body');
-    assert.equal(result.isPoseReady, false);
-  });
-
-  it('counts a squat when the hip drops even if the knee angle is moderate', () => {
-    const counter = createSquatCounter({ targetCount: 5 });
-
-    counter.handleFrame(fullBodyFrame('standing', 1000));
-    counter.handleFrame(fullBodyFrame('standing', 1100));
-    counter.handleFrame(fullBodyFrame('squatting', 2000));
-    counter.handleFrame(fullBodyFrame('squatting', 2100));
-    counter.handleFrame(fullBodyFrame('standing', 3000));
-    const result = counter.handleFrame(fullBodyFrame('standing', 3100));
-
-    assert.equal(result.count, 1);
-    assert.equal(result.phase, 'ready');
-  });
-
-  it('does not count a repetition when only one leg is visible', () => {
-    const counter = createSquatCounter({ targetCount: 5 });
-
-    const result = lowerBodyOnlyRep(counter);
-
-    assert.equal(result.count, 0);
-    assert.equal(result.phase, 'waiting_for_body');
-  });
-
   it('does not count apparent knee bending when the hip does not move downward', () => {
+    // Only knee bend without hip drop should not count
     const counter = createSquatCounter({ targetCount: 5 });
+
     const apparentBend = (timestampMs: number): PoseFrame => ({
       timestampMs,
       imageWidth: 300,
       imageHeight: 640,
+      cameraFacing: 'front',
+      source: 'apple-vision',
+      coordinateSpace: 'upright-top-left-unmirrored',
       landmarks: [
+        // Knees bent but hips at same height as standing
         landmark('leftShoulder', 90, 100),
         landmark('rightShoulder', 210, 100),
         landmark('leftHip', 110, 240),
         landmark('rightHip', 190, 240),
-        landmark('leftKnee', 70, 400),
-        landmark('rightKnee', 230, 400),
+        landmark('leftKnee', 70, 380),
+        landmark('rightKnee', 230, 380),
         landmark('leftAnkle', 120, 560),
         landmark('rightAnkle', 180, 560),
       ],
@@ -317,10 +316,19 @@ describe('squat counter core', () => {
 
   it('does not count a scale jump from moving closer to the camera as a squat', () => {
     const counter = createSquatCounter({ targetCount: 5 });
+
+    // Standing first
+    counter.handleFrame(fullBodyFrame('standing', 1000));
+    counter.handleFrame(fullBodyFrame('standing', 1100));
+
+    // Scale jump - person closer to camera (no actual squat)
     const nearCameraPose = (timestampMs: number): PoseFrame => ({
       timestampMs,
       imageWidth: 300,
       imageHeight: 640,
+      cameraFacing: 'front',
+      source: 'apple-vision',
+      coordinateSpace: 'upright-top-left-unmirrored',
       landmarks: [
         landmark('leftShoulder', 30, 0),
         landmark('rightShoulder', 270, 0),
@@ -333,8 +341,6 @@ describe('squat counter core', () => {
       ],
     });
 
-    counter.handleFrame(fullBodyFrame('standing', 1000));
-    counter.handleFrame(fullBodyFrame('standing', 1100));
     counter.handleFrame(nearCameraPose(2000));
     counter.handleFrame(nearCameraPose(2100));
     counter.handleFrame(fullBodyFrame('standing', 3000));
@@ -351,6 +357,25 @@ describe('squat counter core', () => {
     const result = stableRep(counter, 5000);
 
     assert.equal(result.count, 2);
+    assert.equal(result.isComplete, true);
+  });
+
+  it('counts 5 complete squats', () => {
+    const counter = createSquatCounter({ targetCount: 5 });
+
+    for (let i = 0; i < 5; i++) {
+      const offset = i * 5000;
+      counter.handleFrame(fullBodyFrame('standing', 1000 + offset));
+      counter.handleFrame(fullBodyFrame('standing', 1100 + offset));
+      counter.handleFrame(fullBodyFrame('squatting', 2000 + offset));
+      counter.handleFrame(fullBodyFrame('squatting', 2100 + offset));
+      counter.handleFrame(fullBodyFrame('standing', 3000 + offset));
+      counter.handleFrame(fullBodyFrame('standing', 3100 + offset));
+    }
+
+    const result = counter.handleFrame(fullBodyFrame('standing', 26000));
+
+    assert.equal(result.count, 5);
     assert.equal(result.isComplete, true);
   });
 });

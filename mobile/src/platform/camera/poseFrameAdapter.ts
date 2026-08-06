@@ -15,6 +15,7 @@ export type NativePoseFrameEvent = {
   landmarks?: NativePoseLandmark[];
   cameraFacing?: 'front' | 'back';
   source?: 'apple-vision' | 'mlkit';
+  coordinateSpace?: string;
 };
 
 const supportedLandmarkNames = new Map<string, PoseLandmarkName>([
@@ -33,31 +34,65 @@ const supportedLandmarkNames = new Map<string, PoseLandmarkName>([
 ]);
 
 export function nativePoseEventToFrame(event: NativePoseFrameEvent): PoseFrame | null {
+  // Validate mandatory fields
+  const imageWidth = Number(event.imageWidth);
+  const imageHeight = Number(event.imageHeight);
+
+  if (!Number.isFinite(imageWidth) || !Number.isFinite(imageHeight)) {
+    return null;
+  }
+  if (imageWidth <= 0 || imageHeight <= 0) {
+    return null;
+  }
+
+  const cameraFacing = event.cameraFacing;
+  if (cameraFacing !== 'front' && cameraFacing !== 'back') {
+    return null;
+  }
+
+  const source = event.source;
+  if (source !== 'apple-vision' && source !== 'mlkit') {
+    return null;
+  }
+
+  const coordinateSpace = event.coordinateSpace;
+  if (coordinateSpace !== 'upright-top-left-unmirrored') {
+    return null;
+  }
+
   const timestampMs = Number.isFinite(event.timestampMs) ? Number(event.timestampMs) : Date.now();
 
-  // Validate image dimensions
-  const imageWidth = Number.isFinite(event.imageWidth) && Number(event.imageWidth) > 0 ? Number(event.imageWidth) : undefined;
-  const imageHeight = Number.isFinite(event.imageHeight) && Number(event.imageHeight) > 0 ? Number(event.imageHeight) : undefined;
-
+  // Validate landmarks
   const landmarks = (event.landmarks ?? [])
     .map((item) => {
       const name = normalizeLandmarkName(item.name);
-      const confidence = item.confidence ?? item.inFrameConfidence ?? 0;
-      // Validate: must have finite coordinates and confidence
-      if (!name || !Number.isFinite(item.x) || !Number.isFinite(item.y) || !Number.isFinite(confidence)) {
+      if (!name) {
         return null;
       }
 
-      // Validate: coordinates must be within valid range for the coordinate space
-      // upright-top-left-unmirrored: x >= 0, y >= 0
-      if (item.x < 0 || item.y < 0) {
+      const x = Number(item.x);
+      const y = Number(item.y);
+      const confidence = item.confidence ?? item.inFrameConfidence ?? 0;
+
+      // Must have finite coordinates
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(confidence)) {
+        return null;
+      }
+
+      // Coordinates must be non-negative
+      if (x < 0 || y < 0) {
+        return null;
+      }
+
+      // Coordinates must be within image bounds
+      if (x > imageWidth || y > imageHeight) {
         return null;
       }
 
       return {
         name,
-        x: item.x,
-        y: item.y,
+        x,
+        y,
         confidence,
       } as { name: PoseLandmarkName; x: number; y: number; confidence: number };
     })
@@ -72,8 +107,8 @@ export function nativePoseEventToFrame(event: NativePoseFrameEvent): PoseFrame |
     imageWidth,
     imageHeight,
     landmarks,
-    cameraFacing: event.cameraFacing,
-    source: event.source,
+    cameraFacing,
+    source,
     coordinateSpace: 'upright-top-left-unmirrored',
   };
 }

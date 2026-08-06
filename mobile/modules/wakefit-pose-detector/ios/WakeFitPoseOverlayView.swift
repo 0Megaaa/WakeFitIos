@@ -7,10 +7,24 @@ struct WakeFitPosePoint {
   let confidence: Float
 }
 
+/**
+ * iOS Pose Overlay View.
+ *
+ * Receives canonical upright-top-left-unmirrored pixel coordinates from Vision.
+ * Transforms to view coordinates with aspect-fill scaling.
+ *
+ * For front camera (isMirrored=true): mirror X to match PreviewLayer mirrored preview.
+ * For back camera (isMirrored=false): no mirroring.
+ *
+ * Mirroring formula:
+ *   front:  displayX = imageWidth - canonicalX
+ *   back:   displayX = canonicalX
+ */
 final class WakeFitPoseOverlayView: UIView {
   private var points: [WakeFitPosePoint] = []
   private var imageWidth: CGFloat = 0
   private var imageHeight: CGFloat = 0
+  private var isMirrored: Bool = false
 
   private let confidenceThreshold: Float = 0.55
 
@@ -24,10 +38,11 @@ final class WakeFitPoseOverlayView: UIView {
     fatalError("init(coder:) has not been implemented")
   }
 
-  func updatePose(points: [WakeFitPosePoint], imageWidth: CGFloat, imageHeight: CGFloat) {
+  func updatePose(points: [WakeFitPosePoint], imageWidth: CGFloat, imageHeight: CGFloat, isMirrored: Bool) {
     self.points = points
     self.imageWidth = imageWidth
     self.imageHeight = imageHeight
+    self.isMirrored = isMirrored
     setNeedsDisplay()
   }
 
@@ -83,9 +98,18 @@ final class WakeFitPoseOverlayView: UIView {
     let xOffset = (bounds.width - renderedWidth) / 2
     let yOffset = (bounds.height - renderedHeight) / 2
 
+    // Mirror flag from camera facing
+    let mirrored = self.isMirrored
+
     return { point in
-      CGPoint(
-        x: xOffset + point.x * scale,
+      // Apply front camera mirroring to canonical X coordinate
+      var displayX = point.x
+      if mirrored {
+        displayX = self.imageWidth - point.x
+      }
+
+      return CGPoint(
+        x: xOffset + displayX * scale,
         y: yOffset + point.y * scale
       )
     }

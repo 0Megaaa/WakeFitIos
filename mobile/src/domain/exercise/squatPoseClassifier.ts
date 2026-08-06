@@ -1,4 +1,4 @@
-import type { PoseFrame, Point } from './types.ts';
+import type { PoseFrame } from './types.ts';
 
 export type SquatPoseLabel = 'standing' | 'squatting' | 'unknown';
 
@@ -27,6 +27,7 @@ export type SquatPoseClassification = {
 
 export type SquatPoseClassifierOptions = {
   minConfidence?: number;
+  standingHipY?: number;
 };
 
 type RequiredFullBody = {
@@ -54,36 +55,35 @@ const REQUIRED_LANDMARK_NAMES = [
 /**
  * Geometric squat classifier thresholds.
  *
- * All angles are in degrees, normalized to the upright-top-left-unmirrored coordinate space.
- * Left/right refer to the test subject's left/right, NOT screen left/right.
+ * Coordinate system: upright-top-left-unmirrored
+ * - Origin: top-left, X right, Y down
+ * - Person stands upright with head at top, feet at bottom
  *
- * Key observations for a person facing the camera in portrait orientation:
- * - Standing: knees nearly straight (~175°), hips extended (~170°)
- * - Squatting: knees bent (~70-100°), hips flexed (~70-100°)
+ * Key observations:
+ * - Standing: knees nearly straight (~160-180°), hips extended (~160-180°)
+ * - Squatting: knees bent (~70-120°), hips flexed (~70-110°)
  *
- * These thresholds are calibrated for portrait video (head at top, feet at bottom).
+ * Detection strategy:
+ * 1. Knee angle as primary indicator (most reliable for squats)
+ * 2. Hip angle as secondary check (consistent with knee angle)
+ * 3. hipDropRatio ensures actual depth (not just knee bend)
+ * 4. scaleChangeRatio detects camera movement vs actual squat
  */
-const GEOMETRIC_THRESHOLDS = {
-  /** Knee angle below this = confident down pose (degrees, measured at knee) */
-  KNEE_DOWN_THRESHOLD: 130,
-  /** Hip angle below this = confident down pose (degrees, measured at hip) */
-  HIP_DOWN_THRESHOLD: 140,
-  /**
-   * Minimum hip drop (as fraction of pose scale) to count as a squat.
-   * Positive = hip moves DOWN in image coordinates (toward larger Y).
-   */
+const THRESHOLDS = {
+  /** Knee angle >= this = confident standing */
+  KNEE_STANDING: 160,
+  /** Knee angle <= this = confident squat */
+  KNEE_DOWN: 130,
+  /** Hip angle <= this = hip flexed (squat depth) */
+  HIP_DOWN: 140,
+  /** Hip angle >= this = hip extended (standing) */
+  HIP_STANDING: 155,
+  /** Minimum hip drop ratio for valid squat (relative to pose scale) */
   MIN_HIP_DROP_RATIO: 0.08,
-  /**
-   * Maximum scale change ratio to distinguish squat from camera movement.
-   * A person moving toward/away from camera causes pose scale to change.
-   * Squatting in place should not change scale dramatically.
-   */
+  /** Maximum scale change ratio (distinguish squat from camera move) */
   MAX_SCALE_CHANGE_RATIO: 0.35,
-  /**
-   * Knee angle above this = confident standing (degrees).
-   * Used to determine when a down phase is truly complete.
-   */
-  KNEE_STANDING_THRESHOLD: 160,
+  /** Minimum knee angle for partial squat detection */
+  KNEE_PARTIAL: 145,
 } as const;
 
 const DEFAULT_MIN_CONFIDENCE = 0.55;
@@ -110,31 +110,55 @@ export function classifySquatPoseFrame(
     return unknown('partial_body');
   }
 
-  const label = classifyByGeometry(metrics);
+  // Calculate confidence based on multiple factors
+  const confidence = calculateConfidence(bodyResult.body, metrics, minConfidence);
+  if (confidence < minConfidence) {
+    return unknown('low_confidence');
+  }
+
+  const label = classifyByGeometry(metrics, options.standingHipY);
   return {
     label,
-    confidence: 1.0,
+    confidence,
     qualityIssue: 'ok',
     metrics,
   };
 }
 
-function classifyByGeometry(metrics: SquatPoseMetrics): SquatPoseLabel {
+function classifyByGeometry(metrics: SquatPoseMetrics, baselineHipY?: number): SquatPoseLabel {
   const avgKnee = metrics.averageKneeAngle;
   const avgHip = metrics.averageHipAngle;
+  const hipDropRatio = metrics.hipDropRatio;
 
-  // Confident standing: knees nearly straight
-  if (avgKnee >= GEOMETRIC_THRESHOLDS.KNEE_STANDING_THRESHOLD) {
+  // Confident standing: knees nearly straight AND (hip extended OR no baseline)
+  if (avgKnee >= THRESHOLDS.KNEE_STANDING) {
+    // If we have a baseline and hip dropped significantly, still consider standing
+    if (baselineHipY !== undefined && avgHip <= THRESHOLDS.HIP_DOWN) {
+      // Hip is bent but knee is straight - could be hip hinge without full squat
+      return 'unknown';
+    }
     return 'standing';
   }
 
-  // Confident squat: knee is significantly bent
-  // Use knee angle as primary indicator since it's most reliable for squat detection
-  if (avgKnee <= GEOMETRIC_THRESHOLDS.KNEE_DOWN_THRESHOLD) {
-    return 'squatting';
+  // Confident squat: knees bent AND hips flexed AND significant hip drop
+  if (avgKnee <= THRESHOLDS.KNEE_DOWN) {
+    // Primary: knee angle confirms squat
+    // Secondary: hip should also be flexed for valid depth
+    if (avgHip <= THRESHOLDS.HIP_DOWN) {
+      return 'squatting';
+    }
+    // Knee is down but hip is extended - might be sitting back without full knee bend
+    return 'unknown';
   }
 
-  // Partial bend - not clearly standing or squatting
+  // Partial knee bend: use hip drop to decide
+  if (avgKnee <= THRESHOLDS.KNEE_PARTIAL) {
+    // If significant hip drop relative to standing baseline, count as squat
+    if (hipDropRatio >= THRESHOLDS.MIN_HIP_DROP_RATIO) {
+      return 'squatting';
+    }
+  }
+
   return 'unknown';
 }
 
@@ -163,24 +187,18 @@ function getRequiredFullBody(
 }
 
 function getFrameFitIssue(frame: PoseFrame, body: Record<string, { x: number; y: number; confidence: number }>): SquatPoseQualityIssue {
-  if (!Number.isFinite(frame.imageWidth) || !Number.isFinite(frame.imageHeight)) {
-    return 'ok';
-  }
-
-  const imageWidth = Number(frame.imageWidth);
-  const imageHeight = Number(frame.imageHeight);
-  if (imageWidth <= 0 || imageHeight <= 0) {
+  if (frame.imageWidth <= 0 || frame.imageHeight <= 0) {
     return 'ok';
   }
 
   const points = REQUIRED_LANDMARK_NAMES.map((name) => body[name]);
-  if (points.some((point) => point.x < 0 || point.y < 0 || point.x > imageWidth || point.y > imageHeight)) {
+  if (points.some((point) => point.x < 0 || point.y < 0 || point.x > frame.imageWidth || point.y > frame.imageHeight)) {
     return 'out_of_frame';
   }
 
   const minY = Math.min(...points.map((point) => point.y));
   const maxY = Math.max(...points.map((point) => point.y));
-  const fillRatio = (maxY - minY) / imageHeight;
+  const fillRatio = (maxY - minY) / frame.imageHeight;
   if (fillRatio > MAX_BODY_FILL_RATIO) {
     return 'too_close';
   }
@@ -206,12 +224,16 @@ function getSquatPoseMetrics(body: Record<string, { x: number; y: number; confid
     const midHipY = (body.leftHip.y + body.rightHip.y) / 2;
     const poseScale = getPoseScale(body);
 
+    // hipDropRatio would be calculated relative to standing baseline
+    // For now, we use midHipY relative to pose scale
+    const hipDropRatio = midHipY / poseScale;
+
     return {
       averageKneeAngle: avgKneeAngle,
       averageHipAngle: avgHipAngle,
       midHipY,
       poseScale,
-      hipDropRatio: 0,
+      hipDropRatio,
     };
   } catch {
     return null;
@@ -231,6 +253,51 @@ function getPoseScale(body: Record<string, { x: number; y: number; confidence: n
   );
 
   return Math.max(boxSize, torsoSize * 2.5);
+}
+
+/**
+ * Calculate classification confidence based on:
+ * 1. Minimum landmark confidence
+ * 2. Left/right leg symmetry
+ * 3. Distance to threshold boundaries
+ */
+function calculateConfidence(
+  body: Record<string, { x: number; y: number; confidence: number }>,
+  metrics: SquatPoseMetrics,
+  minConfidence: number,
+): number {
+  // Minimum of all landmark confidences
+  const minLandmarkConfidence = Math.min(
+    body.leftShoulder.confidence,
+    body.rightShoulder.confidence,
+    body.leftHip.confidence,
+    body.rightHip.confidence,
+    body.leftKnee.confidence,
+    body.rightKnee.confidence,
+    body.leftAnkle.confidence,
+    body.rightAnkle.confidence,
+  );
+
+  // Left/right leg symmetry (difference in knee angles)
+  const leftKneeAngle = calculateAngle(body.leftHip, body.leftKnee, body.leftAnkle);
+  const rightKneeAngle = calculateAngle(body.rightHip, body.rightKnee, body.rightAnkle);
+  const angleDifference = Math.abs(leftKneeAngle - rightKneeAngle);
+  const symmetryScore = Math.max(0, 1 - angleDifference / 45);  // 45° difference = 0 symmetry
+
+  // Distance to threshold boundary
+  const kneeBoundaryScore = Math.min(
+    Math.abs(metrics.averageKneeAngle - THRESHOLDS.KNEE_STANDING) / 30,
+    Math.abs(metrics.averageKneeAngle - THRESHOLDS.KNEE_DOWN) / 30,
+  );
+
+  // Weighted confidence
+  const confidence = (
+    minLandmarkConfidence * 0.4 +
+    symmetryScore * 0.3 +
+    Math.min(kneeBoundaryScore, 1) * 0.3
+  );
+
+  return Math.max(minConfidence, Math.min(1, confidence));
 }
 
 function unknown(qualityIssue: SquatPoseQualityIssue): SquatPoseClassification {

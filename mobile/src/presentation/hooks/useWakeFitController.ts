@@ -32,8 +32,6 @@ import type {
 import type { PoseFrame } from '../../domain/exercise/types.ts';
 import { evaluatePoseQuality } from '../../domain/exercise/index.ts';
 
-let lastPoseQualityIssue: string = 'ok';
-
 export type ControllerTab = 'home' | 'alarm' | 'history' | 'backend';
 
 export type WakeFitControllerState = {
@@ -248,6 +246,7 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
   const consumedAlarmLaunches = useRef(new Set<string>());
   const handledAlarmFireKeys = useRef(new Set<string>());
   const alarmRef = useRef<LocalAlarmConfig | null>(null);
+  const lastPoseQualityIssueRef = useRef<string>('ok');
 
   const [tab, setTab] = useState<ControllerTab>('home');
   const [alarm, setAlarm] = useState<LocalAlarmConfig>(() =>
@@ -583,6 +582,11 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
       setStatus(next === 'back' ? '已切换至后置摄像头' : '已切换至前置摄像头');
       return next;
     });
+    // Reset temporary tracking state when switching cameras
+    // Count is preserved by the counter, but down state is cleared
+    setPoseQualityIssue('ok');
+    setPoseGuidance('');
+    lastPoseQualityIssueRef.current = 'ok';
   }, []);
 
   const handleRealPoseFrame = useCallback((frame: PoseFrame) => {
@@ -598,8 +602,8 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
     // Evaluate pose quality first - do not count if quality is not ok
     const quality = evaluatePoseQuality(frame, { exerciseType: currentSnapshot.exerciseType });
 
-    if (quality.issue !== lastPoseQualityIssue) {
-      lastPoseQualityIssue = quality.issue;
+    if (quality.issue !== lastPoseQualityIssueRef.current) {
+      lastPoseQualityIssueRef.current = quality.issue;
       setPoseQualityIssue(quality.issue);
       setPoseGuidance(quality.guidance);
     }
@@ -626,6 +630,10 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
     setFlow(null);
     setSnapshot(null);
     setRealCameraEnabled(false);
+    // Reset temporary tracking state
+    setPoseQualityIssue('ok');
+    setPoseGuidance('');
+    lastPoseQualityIssueRef.current = 'ok';
     setStatus('挑战已重置');
   }, [flow]);
 
@@ -637,6 +645,10 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
     setFlow(null);
     setSnapshot(null);
     setRealCameraEnabled(false);
+    // Reset temporary tracking state
+    setPoseQualityIssue('ok');
+    setPoseGuidance('');
+    lastPoseQualityIssueRef.current = 'ok';
     setStatus('闹钟已关闭，训练已完成');
   }, [snapshot?.status]);
 

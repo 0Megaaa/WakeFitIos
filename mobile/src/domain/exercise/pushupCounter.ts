@@ -199,7 +199,9 @@ export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCou
         return currentResult(true);
       }
 
-      if (observedPose === 'squatting' && (phase === 'standing_ready' || phase === 'waiting_for_body')) {
+      // Only allow standing_ready → down_confirmed
+      // User must first achieve stable standing before a squat can be counted
+      if (observedPose === 'squatting' && phase === 'standing_ready') {
         phase = 'down_confirmed';
         return currentResult(true);
       }

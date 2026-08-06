@@ -25,6 +25,11 @@ function frame(
 
   return {
     timestampMs,
+    imageWidth: 300,
+    imageHeight: 640,
+    cameraFacing: 'front',
+    source: 'apple-vision',
+    coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
       landmark(`${prefix}Shoulder` as PoseLandmarkName, -1, 0, confidence),
       landmark(`${prefix}Elbow` as PoseLandmarkName, 0, 0, confidence),

@@ -22,6 +22,11 @@ function pushUpFrame(
 
   return {
     timestampMs,
+    imageWidth: 300,
+    imageHeight: 640,
+    cameraFacing: 'front',
+    source: 'apple-vision',
+    coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
       landmark('leftShoulder', -1, 0, confidence),
       landmark('leftElbow', 0, 0, confidence),
@@ -46,10 +51,11 @@ function squatFrame(
         rightAnkle: { x: 180, y: 560 },
       }
     : {
-        leftHip: { x: 115, y: 370 },
-        rightHip: { x: 185, y: 370 },
-        leftKnee: { x: 65, y: 490 },
-        rightKnee: { x: 235, y: 490 },
+        // Squatting: knees significantly forward with hip drop
+        leftHip: { x: 115, y: 280 },
+        rightHip: { x: 185, y: 280 },
+        leftKnee: { x: 60, y: 440 },
+        rightKnee: { x: 240, y: 440 },
         leftAnkle: { x: 120, y: 560 },
         rightAnkle: { x: 180, y: 560 },
       };
@@ -58,9 +64,12 @@ function squatFrame(
     timestampMs,
     imageWidth: 300,
     imageHeight: 640,
+    cameraFacing: 'front',
+    source: 'apple-vision',
+    coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
-      landmark('leftShoulder', 90, pose === 'standing' ? 100 : 130, confidence),
-      landmark('rightShoulder', 210, pose === 'standing' ? 100 : 130, confidence),
+      landmark('leftShoulder', 90, pose === 'standing' ? 100 : 110, confidence),
+      landmark('rightShoulder', 210, pose === 'standing' ? 100 : 110, confidence),
       landmark('leftHip', lowerBody.leftHip.x, lowerBody.leftHip.y, confidence),
       landmark('rightHip', lowerBody.rightHip.x, lowerBody.rightHip.y, confidence),
       landmark('leftKnee', lowerBody.leftKnee.x, lowerBody.leftKnee.y, confidence),

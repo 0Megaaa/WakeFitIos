@@ -57,6 +57,11 @@ function createPushUpFrame(angle: 'up' | 'down', timestampMs: number): PoseFrame
 
   return {
     timestampMs,
+    imageWidth: 300,
+    imageHeight: 640,
+    cameraFacing: 'front',
+    source: 'apple-vision',
+    coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
       landmark('leftShoulder', -1, 0),
       landmark('leftElbow', 0, 0),
@@ -89,6 +94,9 @@ function createSquatFrame(pose: 'standing' | 'squatting', timestampMs: number): 
     timestampMs,
     imageWidth: 300,
     imageHeight: 640,
+    cameraFacing: 'front',
+    source: 'apple-vision',
+    coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
       landmark('leftShoulder', 90, pose === 'standing' ? 100 : 130),
       landmark('rightShoulder', 210, pose === 'standing' ? 100 : 130),

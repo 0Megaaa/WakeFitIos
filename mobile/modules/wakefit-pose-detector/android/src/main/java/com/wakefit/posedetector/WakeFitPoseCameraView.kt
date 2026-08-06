@@ -25,6 +25,20 @@ import expo.modules.kotlin.views.ExpoView
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
+/**
+ * Android Pose Camera implementation.
+ *
+ * Coordinate pipeline:
+ * 1. ImageProxy provides pixel buffer with rotationDegrees
+ * 2. InputImage.fromMediaImage(mediaImage, rotationDegrees) tells ML Kit to process rotated image
+ * 3. ML Kit returns pixel coordinates in the rotated image space
+ * 4. We transform to upright-top-left-unmirrored (canonical) for JS
+ * 5. PreviewView handles its own display transformation
+ *
+ * ML Kit landmark positions are in pixel coordinates of the processed image.
+ * InputImage.withRotation() rotates the image before detection, so coordinates
+ * are relative to the rotated (canonical upright) image space.
+ */
 class WakeFitPoseCameraView(
   context: android.content.Context,
   appContext: AppContext,
@@ -37,19 +51,27 @@ class WakeFitPoseCameraView(
       .setDetectorMode(AccuratePoseDetectorOptions.STREAM_MODE)
       .build(),
   )
+
+  // Camera lifecycle state
   private var cameraProvider: ProcessCameraProvider? = null
+  private var cameraStartToken = 0
+  private var cameraFacingValue = "front"
+
+  // Frame processing state
   private var processingFrame = false
-  private var cameraStarted = false
   private var loggedFirstFrame = false
   private var loggedFirstPose = false
-  private var cameraStartToken = 0
 
   private val onPoseFrame by EventDispatcher()
   private val onCameraError by EventDispatcher()
 
   var cameraFacing: String = "front"
     set(value) {
-      field = value
+      // Normalize to front/back
+      val normalized = if (value == "back") "back" else "front"
+      if (field == normalized) return  // No change
+      field = normalized
+      cameraFacingValue = normalized
       if (isAttachedToWindow) {
         restartCamera()
       }
@@ -100,7 +122,7 @@ class WakeFitPoseCameraView(
   }
 
   private fun maybeStartCamera() {
-    if (!isAttachedToWindow || cameraStarted) {
+    if (!isAttachedToWindow || cameraProvider != null) {
       return
     }
     if (width <= 0 || height <= 0) {
@@ -123,19 +145,16 @@ class WakeFitPoseCameraView(
       return
     }
 
-    cameraStarted = true
     val startToken = ++cameraStartToken
-    Log.i(TAG, "starting camera facing=$cameraFacing view=${width}x${height}")
+    Log.i(TAG, "starting camera facing=$cameraFacingValue token=$startToken")
 
     val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
     cameraProviderFuture.addListener(
       {
         try {
           val provider = cameraProviderFuture.get()
-          cameraProvider = provider
           bindCameraUseCases(provider, lifecycleOwner, startToken)
         } catch (error: Exception) {
-          cameraStarted = false
           emitCameraError(error.message ?: "CAMERA_START_FAILED")
         }
       },
@@ -148,16 +167,19 @@ class WakeFitPoseCameraView(
     lifecycleOwner: LifecycleOwner,
     startToken: Int,
   ) {
-    if (!cameraStarted || cameraStartToken != startToken || !isAttachedToWindow) {
+    // Check if this is still the current bind request
+    if (cameraStartToken != startToken || !isAttachedToWindow) {
       Log.i(TAG, "skip stale camera bind token=$startToken current=$cameraStartToken")
       return
     }
 
+    cameraProvider = provider
+
     try {
       val targetRotation = display?.rotation ?: Surface.ROTATION_0
-      Log.i(TAG, "binding camera target=${TARGET_RESOLUTION.width}x${TARGET_RESOLUTION.height} rotation=$targetRotation")
+      Log.i(TAG, "binding camera facing=$cameraFacingValue rotation=$targetRotation")
 
-      // Preview use case for live camera feed
+      // Preview - PreviewView handles display transformation internally
       val preview = Preview.Builder()
         .setTargetResolution(TARGET_RESOLUTION)
         .setTargetRotation(targetRotation)
@@ -166,7 +188,7 @@ class WakeFitPoseCameraView(
           it.setSurfaceProvider(previewView.surfaceProvider)
         }
 
-      // ImageAnalysis for ML Kit pose detection
+      // ImageAnalysis - for ML Kit detection
       val analysis = ImageAnalysis.Builder()
         .setTargetResolution(TARGET_RESOLUTION)
         .setTargetRotation(targetRotation)
@@ -174,7 +196,7 @@ class WakeFitPoseCameraView(
         .build()
         .also {
           it.setAnalyzer(analysisExecutor) { imageProxy ->
-            analyzeImage(imageProxy)
+            analyzeImage(imageProxy, startToken)
           }
         }
 
@@ -188,25 +210,36 @@ class WakeFitPoseCameraView(
       camera.cameraInfo.cameraState.observe(lifecycleOwner) { state ->
         Log.i(TAG, "camera state ${state.type} error=${state.error}")
       }
-      Log.i(TAG, "camera bind success preview+analysis")
+      Log.i(TAG, "camera bind success")
     } catch (error: Exception) {
-      cameraStarted = false
-      emitCameraError(error.message ?: "CAMERA_START_FAILED")
+      cameraProvider = null
+      emitCameraError(error.message ?: "CAMERA_BIND_FAILED")
     }
   }
 
   private fun stopCamera() {
     processingFrame = false
-    cameraStarted = false
-    cameraStartToken += 1
+    cameraStartToken += 1  // Invalidate any pending frames
     loggedFirstFrame = false
     loggedFirstPose = false
     cameraProvider?.unbindAll()
+    cameraProvider = null
     poseOverlayView.clearPose()
-    Log.i(TAG, "camera stopped")
+    Log.i(TAG, "camera stopped token=${cameraStartToken}")
   }
 
-  private fun analyzeImage(imageProxy: ImageProxy) {
+  /**
+   * Analyze a single image frame.
+   * Token parameter ensures stale frames from previous camera session are discarded.
+   */
+  private fun analyzeImage(imageProxy: ImageProxy, bindToken: Int) {
+    // Discard stale frames from previous camera bind
+    if (bindToken != cameraStartToken) {
+      Log.i(TAG, "discard stale frame token=$bindToken current=$cameraStartToken")
+      imageProxy.close()
+      return
+    }
+
     if (!loggedFirstFrame) {
       loggedFirstFrame = true
       Log.i(TAG, "first analysis frame ${imageProxy.width}x${imageProxy.height} rotation=${imageProxy.imageInfo.rotationDegrees}")
@@ -227,23 +260,24 @@ class WakeFitPoseCameraView(
       return
     }
 
-    // Use InputImage.fromMediaImage for efficient direct access (no JPEG compression)
-    val inputImage = InputImage.fromMediaImage(
-      mediaImage,
-      imageProxy.imageInfo.rotationDegrees,
-    )
-
-    // Mirror coordinates for front camera
-    val isFrontCamera = cameraFacing != "back"
-    val imageWidth = imageProxy.width
-    val imageHeight = imageProxy.height
+    // InputImage.withRotationDegrees rotates the image before ML Kit processes it.
+    // ML Kit returns coordinates in the rotated (canonical upright) image space.
+    val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+    val inputImage = InputImage.fromMediaImage(mediaImage, rotationDegrees)
 
     detector.process(inputImage)
       .addOnSuccessListener { pose ->
-        emitPoseFrame(pose, imageWidth, imageHeight, isFrontCamera)
+        // Check token again after async detection
+        if (bindToken != cameraStartToken) {
+          Log.i(TAG, "discard stale detection token=$bindToken current=$cameraStartToken")
+          return@addOnSuccessListener
+        }
+        emitPoseFrame(pose, imageProxy.width, imageProxy.height, rotationDegrees, cameraFacingValue)
       }
       .addOnFailureListener { error ->
-        emitCameraError(error.message ?: "POSE_DETECTION_FAILED")
+        if (bindToken == cameraStartToken) {
+          emitCameraError(error.message ?: "POSE_DETECTION_FAILED")
+        }
       }
       .addOnCompleteListener {
         processingFrame = false
@@ -251,91 +285,106 @@ class WakeFitPoseCameraView(
       }
   }
 
-  private fun emitPoseFrame(pose: Pose, frameWidth: Int, frameHeight: Int, mirrorFront: Boolean) {
-    val landmarks = collectPosePoints(pose, frameWidth, frameHeight, mirrorFront)
+  /**
+   * Emit pose data to JS and update overlay.
+   *
+   * @param pose ML Kit detection result (already in rotated image coordinates)
+   * @param sourceWidth Raw ImageProxy width
+   * @param sourceHeight Raw ImageProxy height
+   * @param rotationDegrees ImageProxy rotation
+   * @param facing Current camera facing
+   */
+  private fun emitPoseFrame(
+    pose: Pose,
+    sourceWidth: Int,
+    sourceHeight: Int,
+    rotationDegrees: Int,
+    facing: String,
+  ) {
+    // ML Kit coordinates are already in rotated (upright) space due to InputImage.withRotationDegrees
+    // Calculate upright dimensions
+    val (uprightWidth, uprightHeight) = getUprightDimensions(sourceWidth, sourceHeight, rotationDegrees)
+
+    // Collect landmarks in canonical upright-top-left-unmirrored space
+    // ML Kit already applied rotation, so coordinates are relative to rotated image
+    val landmarks = collectCanonicalPosePoints(pose, uprightWidth, uprightHeight)
+
     if (!loggedFirstPose && landmarks.isNotEmpty()) {
       loggedFirstPose = true
-      Log.i(TAG, "first pose landmarks=${landmarks.size} display=${frameWidth}x${frameHeight}")
+      Log.i(TAG, "first pose landmarks=${landmarks.size} canonical=${uprightWidth}x${uprightHeight}")
     }
+
+    // Update overlay with canonical coordinates and PreviewView transformation
+    // PreviewView handles its own display transformation
     poseOverlayView.post {
       poseOverlayView.updatePose(
         landmarks,
-        frameWidth,
-        frameHeight,
-        0,
-        mirrorFront,
+        uprightWidth,
+        uprightHeight,
+        rotationDegrees,
+        facing == "front",
       )
     }
 
+    // Emit canonical PoseFrame to JS
     onPoseFrame(
       mapOf(
         "timestampMs" to System.currentTimeMillis().toDouble(),
-        "imageWidth" to frameWidth,
-        "imageHeight" to frameHeight,
+        "imageWidth" to uprightWidth,
+        "imageHeight" to uprightHeight,
         "landmarks" to landmarks.map { toEventLandmark(it) },
-        "cameraFacing" to cameraFacing,
+        "cameraFacing" to facing,
         "source" to "mlkit",
         "coordinateSpace" to "upright-top-left-unmirrored",
       ),
     )
   }
 
-  private fun collectPosePoints(pose: Pose, imageWidth: Int, imageHeight: Int, mirror: Boolean): List<WakeFitPosePoint> {
-    val isPortrait = imageWidth < imageHeight
-    val effectiveWidth = if (isPortrait) imageHeight else imageWidth
-    val effectiveHeight = if (isPortrait) imageWidth else imageHeight
-
-    return listOfNotNull(
-      toPosePoint(pose, PoseLandmark.LEFT_SHOULDER, "leftShoulder", effectiveWidth, effectiveHeight, mirror, isPortrait),
-      toPosePoint(pose, PoseLandmark.LEFT_ELBOW, "leftElbow", effectiveWidth, effectiveHeight, mirror, isPortrait),
-      toPosePoint(pose, PoseLandmark.LEFT_WRIST, "leftWrist", effectiveWidth, effectiveHeight, mirror, isPortrait),
-      toPosePoint(pose, PoseLandmark.LEFT_HIP, "leftHip", effectiveWidth, effectiveHeight, mirror, isPortrait),
-      toPosePoint(pose, PoseLandmark.LEFT_KNEE, "leftKnee", effectiveWidth, effectiveHeight, mirror, isPortrait),
-      toPosePoint(pose, PoseLandmark.LEFT_ANKLE, "leftAnkle", effectiveWidth, effectiveHeight, mirror, isPortrait),
-      toPosePoint(pose, PoseLandmark.RIGHT_SHOULDER, "rightShoulder", effectiveWidth, effectiveHeight, mirror, isPortrait),
-      toPosePoint(pose, PoseLandmark.RIGHT_ELBOW, "rightElbow", effectiveWidth, effectiveHeight, mirror, isPortrait),
-      toPosePoint(pose, PoseLandmark.RIGHT_WRIST, "rightWrist", effectiveWidth, effectiveHeight, mirror, isPortrait),
-      toPosePoint(pose, PoseLandmark.RIGHT_HIP, "rightHip", effectiveWidth, effectiveHeight, mirror, isPortrait),
-      toPosePoint(pose, PoseLandmark.RIGHT_KNEE, "rightKnee", effectiveWidth, effectiveHeight, mirror, isPortrait),
-      toPosePoint(pose, PoseLandmark.RIGHT_ANKLE, "rightAnkle", effectiveWidth, effectiveHeight, mirror, isPortrait),
-    )
+  /**
+   * Get upright image dimensions based on rotation.
+   * After rotation, portrait orientation means height > width.
+   */
+  private fun getUprightDimensions(sourceWidth: Int, sourceHeight: Int, rotationDegrees: Int): Pair<Int, Int> {
+    return when (rotationDegrees) {
+      90, 270 -> Pair(sourceHeight, sourceWidth)  // Rotated: swap dimensions
+      else -> Pair(sourceWidth, sourceHeight)       // 0 or 180: keep as-is
+    }
   }
 
-  private fun toPosePoint(
-    pose: Pose,
-    type: Int,
-    name: String,
-    imageWidth: Int,
-    imageHeight: Int,
-    mirror: Boolean,
-    isPortrait: Boolean,
-  ): WakeFitPosePoint? {
-    val landmark = pose.getPoseLandmark(type) ?: return null
-    val position = landmark.position
-
-    // MLKit returns normalized [0,1] coordinates with origin at top-left
-    // Convert to upright-top-left-unmirrored coordinate space
-    var x = position.x * imageWidth
-    var y = position.y * imageHeight
-
-    // Handle rotation: MLKit coordinates are in image space, need to rotate to view space
-    if (isPortrait) {
-      val tempX = x
-      x = y
-      y = imageWidth - tempX
-    }
-
-    // Mirror left/right for front camera to match the upright-top-left-unmirrored contract
-    if (mirror) {
-      x = imageHeight - x
-    }
-
-    return WakeFitPosePoint(
-      name,
-      x,
-      y,
-      landmark.inFrameLikelihood,
+  /**
+   * Collect pose landmarks in canonical upright-top-left-unmirrored pixel coordinates.
+   *
+   * ML Kit landmarks are in pixel coordinates of the rotated image (due to InputImage rotation).
+   * For canonical upright-top-left-unmirrored:
+   * - Origin at top-left
+   * - X increases rightward
+   * - Y increases downward
+   * - Portrait orientation (height > width typically)
+   * - NO mirroring for front camera
+   */
+  private fun collectCanonicalPosePoints(pose: Pose, imageWidth: Int, imageHeight: Int): List<WakeFitPosePoint> {
+    val requiredTypes = listOf(
+      PoseLandmark.LEFT_SHOULDER to "leftShoulder",
+      PoseLandmark.RIGHT_SHOULDER to "rightShoulder",
+      PoseLandmark.LEFT_HIP to "leftHip",
+      PoseLandmark.RIGHT_HIP to "rightHip",
+      PoseLandmark.LEFT_KNEE to "leftKnee",
+      PoseLandmark.RIGHT_KNEE to "rightKnee",
+      PoseLandmark.LEFT_ANKLE to "leftAnkle",
+      PoseLandmark.RIGHT_ANKLE to "rightAnkle",
     )
+
+    return requiredTypes.mapNotNull { (type, name) ->
+      val landmark = pose.getPoseLandmark(type) ?: return@mapNotNull null
+      val pos = landmark.position
+      WakeFitPosePoint(
+        name = name,
+        // ML Kit coordinates are already in rotated image space (canonical upright)
+        x = pos.x,
+        y = pos.y,
+        confidence = landmark.inFrameLikelihood,
+      )
+    }
   }
 
   private fun toEventLandmark(point: WakeFitPosePoint): Map<String, Any> {
@@ -348,7 +397,7 @@ class WakeFitPoseCameraView(
   }
 
   private fun getCameraSelector(): CameraSelector {
-    return if (cameraFacing == "back") {
+    return if (cameraFacingValue == "back") {
       CameraSelector.DEFAULT_BACK_CAMERA
     } else {
       CameraSelector.DEFAULT_FRONT_CAMERA

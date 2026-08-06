@@ -44,15 +44,8 @@ const SQUAT_REQUIRED_LANDMARKS: Array<keyof RequiredBodyLandmarks> = [
   'rightAnkle',
 ];
 
-// Push-up requires upper body landmarks (no ankles)
-type RequiredPushupLandmarks = RequiredBodyLandmarks & {
-  leftElbow: boolean;
-  rightElbow: boolean;
-  leftWrist: boolean;
-  rightWrist: boolean;
-};
-
-const PUSHUP_REQUIRED_LANDMARKS: Array<keyof RequiredPushupLandmarks> = [
+// Push-up requires upper body landmarks (no ankles required)
+const PUSHUP_REQUIRED_LANDMARKS: Array<keyof RequiredBodyLandmarks | 'leftElbow' | 'rightElbow' | 'leftWrist' | 'rightWrist'> = [
   'leftShoulder',
   'rightShoulder',
   'leftElbow',
@@ -63,8 +56,13 @@ const PUSHUP_REQUIRED_LANDMARKS: Array<keyof RequiredPushupLandmarks> = [
   'rightHip',
 ];
 
-const GUIDANCE: Record<PoseQualityIssue, string> = {
-  ok: '全身已识别，可以开始深蹲',
+// Body fill ratio thresholds
+const MIN_BODY_FILL_RATIO = 0.32;
+const MAX_BODY_FILL_RATIO = 0.92;
+
+// Exercise-specific guidance
+const SQUAT_GUIDANCE: Record<PoseQualityIssue, string> = {
+  ok: '姿势标准，可以开始深蹲',
   partial_body: '请后退并确保头部、肩部、髋部、膝盖和脚踝全部入镜',
   low_confidence: '识别不稳定，请保持光线充足并站稳',
   out_of_frame: '请后退并确保头部、肩部、髋部、膝盖和脚踝全部入镜',
@@ -72,8 +70,21 @@ const GUIDANCE: Record<PoseQualityIssue, string> = {
   too_far: '请靠近一些',
 };
 
+const PUSHUP_GUIDANCE: Record<PoseQualityIssue, string> = {
+  ok: '姿势标准，可以开始俯卧撑',
+  partial_body: '请确保头部、肩部、手臂和髋部全部入镜',
+  low_confidence: '识别不稳定，请保持光线充足并站稳',
+  out_of_frame: '请调整位置，确保上半身完整显示',
+  too_close: '请后退一些，确保全身完整显示',
+  too_far: '请靠近一些',
+};
+
 function getRequiredLandmarks(exerciseType: string): Array<string> {
   return exerciseType === 'squat' ? SQUAT_REQUIRED_LANDMARKS : PUSHUP_REQUIRED_LANDMARKS;
+}
+
+function getGuidance(issue: PoseQualityIssue, exerciseType: string): string {
+  return exerciseType === 'squat' ? SQUAT_GUIDANCE[issue] : PUSHUP_GUIDANCE[issue];
 }
 
 export function evaluatePoseQuality(
@@ -89,10 +100,11 @@ export function evaluatePoseQuality(
     byName.set(landmark.name, landmark);
   }
 
-  // Check for missing or low-confidence landmarks
+  // Check for missing landmarks
   let visibleCount = 0;
-  let minSeenConfidence = 1;
   let hasMissing = false;
+  let hasLowConfidence = false;
+  let minSeenConfidence = 1;
 
   for (const name of requiredLandmarks) {
     const landmark = byName.get(name);
@@ -101,19 +113,35 @@ export function evaluatePoseQuality(
       break;
     }
     if (landmark.confidence < minConfidence) {
-      hasMissing = true;
-      break;
-    }
-    visibleCount += 1;
-    if (landmark.confidence < minSeenConfidence) {
-      minSeenConfidence = landmark.confidence;
+      hasLowConfidence = true;
+      if (landmark.confidence < minSeenConfidence) {
+        minSeenConfidence = landmark.confidence;
+      }
+    } else {
+      visibleCount += 1;
+      if (landmark.confidence < minSeenConfidence) {
+        minSeenConfidence = landmark.confidence;
+      }
     }
   }
 
   if (hasMissing) {
     return {
       issue: 'partial_body',
-      guidance: GUIDANCE.partial_body,
+      guidance: getGuidance('partial_body', exerciseType),
+      metrics: {
+        visibleLandmarkCount: visibleCount,
+        requiredLandmarkCount: requiredLandmarks.length,
+        minConfidence: minSeenConfidence,
+        bodyFillRatio: null,
+      },
+    };
+  }
+
+  if (hasLowConfidence) {
+    return {
+      issue: 'low_confidence',
+      guidance: getGuidance('low_confidence', exerciseType),
       metrics: {
         visibleLandmarkCount: visibleCount,
         requiredLandmarkCount: requiredLandmarks.length,
@@ -124,17 +152,15 @@ export function evaluatePoseQuality(
   }
 
   // Check coordinates are within valid range
-  const imageWidth = frame.imageWidth ?? 0;
-  const imageHeight = frame.imageHeight ?? 0;
-  if (imageWidth > 0 && imageHeight > 0) {
+  if (frame.imageWidth > 0 && frame.imageHeight > 0) {
     const pointsOutOfFrame = requiredLandmarks.some((name) => {
       const lm = byName.get(name)!;
-      return lm.x < 0 || lm.y < 0 || lm.x > imageWidth || lm.y > imageHeight;
+      return lm.x < 0 || lm.y < 0 || lm.x > frame.imageWidth || lm.y > frame.imageHeight;
     });
     if (pointsOutOfFrame) {
       return {
         issue: 'out_of_frame',
-        guidance: GUIDANCE.out_of_frame,
+        guidance: getGuidance('out_of_frame', exerciseType),
         metrics: {
           visibleLandmarkCount: visibleCount,
           requiredLandmarkCount: requiredLandmarks.length,
@@ -148,12 +174,12 @@ export function evaluatePoseQuality(
     const allPoints = requiredLandmarks.map((name) => byName.get(name)!);
     const minY = Math.min(...allPoints.map((p) => p.y));
     const maxY = Math.max(...allPoints.map((p) => p.y));
-    const fillRatio = (maxY - minY) / imageHeight;
+    const fillRatio = (maxY - minY) / frame.imageHeight;
 
-    if (fillRatio > 0.92) {
+    if (fillRatio > MAX_BODY_FILL_RATIO) {
       return {
         issue: 'too_close',
-        guidance: GUIDANCE.too_close,
+        guidance: getGuidance('too_close', exerciseType),
         metrics: {
           visibleLandmarkCount: visibleCount,
           requiredLandmarkCount: requiredLandmarks.length,
@@ -163,10 +189,10 @@ export function evaluatePoseQuality(
       };
     }
 
-    if (fillRatio < 0.32) {
+    if (fillRatio < MIN_BODY_FILL_RATIO) {
       return {
         issue: 'too_far',
-        guidance: GUIDANCE.too_far,
+        guidance: getGuidance('too_far', exerciseType),
         metrics: {
           visibleLandmarkCount: visibleCount,
           requiredLandmarkCount: requiredLandmarks.length,
@@ -175,12 +201,24 @@ export function evaluatePoseQuality(
         },
       };
     }
+
+    // All checks passed - return actual bodyFillRatio
+    return {
+      issue: 'ok',
+      guidance: getGuidance('ok', exerciseType),
+      metrics: {
+        visibleLandmarkCount: visibleCount,
+        requiredLandmarkCount: requiredLandmarks.length,
+        minConfidence: minSeenConfidence,
+        bodyFillRatio: (maxY - minY) / frame.imageHeight,
+      },
+    };
   }
 
-  // All checks passed
+  // No image dimensions - all landmarks present with sufficient confidence
   return {
     issue: 'ok',
-    guidance: GUIDANCE.ok,
+    guidance: getGuidance('ok', exerciseType),
     metrics: {
       visibleLandmarkCount: visibleCount,
       requiredLandmarkCount: requiredLandmarks.length,
