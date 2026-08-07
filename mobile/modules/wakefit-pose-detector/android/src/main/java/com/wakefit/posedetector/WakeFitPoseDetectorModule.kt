@@ -44,6 +44,13 @@ class WakeFitPoseDetectorModule : Module() {
     View(WakeFitPoseCameraView::class) {
       Events("onPoseFrame", "onCameraError")
 
+      // Permanent view destruction — closes ML Kit detector and executor.
+      // This fires when React Native permanently unmounts the native view,
+      // which is the definitive end-of-life signal for the camera resources.
+      OnViewDestroys { view: WakeFitPoseCameraView ->
+        view.destroyResources()
+      }
+
       Prop("cameraFacing") { view: WakeFitPoseCameraView, cameraFacing: String ->
         view.cameraFacing = cameraFacing
       }

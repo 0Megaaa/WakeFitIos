@@ -80,6 +80,29 @@ function fullBodyFrame(
 }
 
 /**
+ * Creates a partial-body frame (only upper body landmarks).
+ * Used to simulate when the user's lower body leaves the camera frame.
+ */
+function partialBodyFrame(timestampMs: number, confidence = 0.95): PoseFrame {
+  return {
+    timestampMs,
+    imageWidth: 300,
+    imageHeight: 640,
+    cameraFacing: 'front',
+    source: 'apple-vision',
+    coordinateSpace: 'upright-top-left-unmirrored',
+    landmarks: [
+      // Only upper body — no hip, knee, or ankle landmarks.
+      // This mimics the ML Kit output when the lower body is out of frame.
+      landmark('leftShoulder', 140, 160, confidence),
+      landmark('rightShoulder', 160, 160, confidence),
+      landmark('leftElbow', 110, 220, confidence),
+      landmark('rightElbow', 190, 220, confidence),
+    ],
+  };
+}
+
+/**
  * Creates a transition frame (partial squat, label = unknown).
  * The person is in a mid-motion state where the classifier cannot
  * confidently label as 'standing' or 'squatting'.
@@ -713,6 +736,43 @@ describe('squat counter', () => {
       result = counter.handleFrame(fullBodyFrame('standing', 4300));
       assert.equal(result.phase, 'ready');
       assert.equal(result.count, 1, 'count should be preserved');
+    });
+  });
+
+  describe('long invalid pose timeout', () => {
+    it('resets an unfinished squat after pose is invalid for more than 700ms', () => {
+      const counter = createSquatCounter({ targetCount: 5 });
+
+      // Step 1: standing × 3 → enter ready
+      counter.handleFrame(fullBodyFrame('standing', 1000));
+      counter.handleFrame(fullBodyFrame('standing', 1100));
+      counter.handleFrame(fullBodyFrame('standing', 1200));
+      counter.handleFrame(fullBodyFrame('standing', 1300));
+      assert.equal(counter.handleFrame(fullBodyFrame('standing', 1400)).phase, 'ready');
+
+      // Step 2: squatting × 3 → enter down
+      counter.handleFrame(fullBodyFrame('squatting', 2000));
+      counter.handleFrame(fullBodyFrame('squatting', 2100));
+      const afterDown = counter.handleFrame(fullBodyFrame('squatting', 2200));
+      assert.equal(afterDown.phase, 'down');
+
+      // Step 3: partial_body at t=3000 (only 800ms since last squat frame)
+      counter.handleFrame(partialBodyFrame(3000));
+
+      // Step 4: partial_body at t=3800 — 800ms gap exceeds the 700ms threshold.
+      // The counter resets to waiting_for_body and clears the baseline.
+      const afterTimeout = counter.handleFrame(partialBodyFrame(3800));
+      assert.equal(afterTimeout.phase, 'waiting_for_body', 'should return to waiting after 700ms timeout');
+      assert.equal(afterTimeout.count, 0, 'should not count an unfinished squat');
+
+      // Step 5: standing × 4 → re-establish baseline → enter ready
+      counter.handleFrame(fullBodyFrame('standing', 4000));
+      counter.handleFrame(fullBodyFrame('standing', 4100));
+      counter.handleFrame(fullBodyFrame('standing', 4200));
+      const finalResult = counter.handleFrame(fullBodyFrame('standing', 4300));
+
+      assert.equal(finalResult.count, 0, 'count must remain 0');
+      assert.equal(finalResult.phase, 'ready', 'phase must be ready after re-establishing baseline');
     });
   });
 });

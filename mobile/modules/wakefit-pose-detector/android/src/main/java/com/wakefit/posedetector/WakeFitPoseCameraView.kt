@@ -34,11 +34,11 @@ import java.util.concurrent.Executors
  *
  * Coordinate pipeline:
  * 1. UseCaseGroup with ViewPort ensures Preview and ImageAnalysis share the same view crop
- * 2. ImageProxyTransformFactory creates transformation from analysis to PreviewView
- * 3. ML Kit processes rotated image via InputImage.fromMediaImage(rotationDegrees)
- * 4. ML Kit returns pixel coordinates in canonical upright image space
- * 5. Emit canonical PoseFrame to JS (upright-top-left-unmirrored)
- * 6. Overlay uses CoordinateTransform for accurate display positioning
+ * 2. ML Kit processes rotated image via InputImage.fromMediaImage(rotationDegrees)
+ * 3. ML Kit returns pixel coordinates in upright image space
+ * 4. Emit canonical PoseFrame to JS (upright-top-left-unmirrored) — front and back identical
+ * 5. Overlay receives raw ML Kit upright points; CameraX applies all
+ *    rotation, crop and front-camera mirroring internally
  */
 class WakeFitPoseCameraView(
   context: android.content.Context,
@@ -101,27 +101,6 @@ class WakeFitPoseCameraView(
         ViewGroup.LayoutParams.MATCH_PARENT,
         ViewGroup.LayoutParams.MATCH_PARENT,
       ),
-    )
-
-    // Distinguish temporary detach (e.g. RecyclerView recycle, scroll off)
-    // from permanent destruction. Temporary detach keeps the ML Kit
-    // detector and analysisExecutor alive so the next attach is cheap;
-    // permanent destroy closes everything via destroyResources().
-    addOnAttachStateChangeListener(
-      object : android.view.View.OnAttachStateChangeListener {
-        override fun onViewAttachedToWindow(v: android.view.View) {
-          Log.i(TAG, "attach-state attached")
-        }
-
-        override fun onViewDetachedFromWindow(v: android.view.View) {
-          Log.i(TAG, "attach-state detached (will be destroyed if window is gone)")
-          if (!destroyed && !hasWindowFocus()) {
-            // The view left the window with no intent of returning soon.
-            // Treat this as the final destroy path.
-            destroyResources()
-          }
-        }
-      },
     )
   }
 
@@ -387,7 +366,6 @@ class WakeFitPoseCameraView(
     val frameWidth = imageProxy.width
     val frameHeight = imageProxy.height
     val rotationDegrees = imageProxy.imageInfo.rotationDegrees
-    val isFrontCamera = frameFacing == "front"
 
     val inputImage = InputImage.fromMediaImage(mediaImage, rotationDegrees)
 
@@ -419,6 +397,12 @@ class WakeFitPoseCameraView(
 
   /**
    * Emit pose data to JS and update overlay.
+   *
+   * Canonical PoseFrame (sent to JS): raw ML Kit upright coords.
+   * Front and back canonical coords are identical.
+   *
+   * Overlay: raw ML Kit upright points go straight to CameraX Matrix.
+   * CameraX handles rotation, crop and front-mirror internally — no pre-mirror here.
    */
   private fun emitPoseFrame(
     pose: Pose,
@@ -434,20 +418,16 @@ class WakeFitPoseCameraView(
       return
     }
 
-    // ML Kit coordinates are in rotated (upright) image space.
-    // Upright dimensions swap axes on 90/270 rotations.
     val rotationDegrees = imageProxy.imageInfo.rotationDegrees
-    val cropRect = imageProxy.cropRect
-    val isFrontCamera = frameFacing == "front"
+
     val (uprightWidth, uprightHeight) = PoseCoordinateMapper.uprightDimensions(
       rawWidth = sourceWidth,
       rawHeight = sourceHeight,
       rotationDegrees = rotationDegrees,
     )
 
-    // Run every landmark through the pure mapper so the contract
-    // ("canonical = upright-top-left-unmirrored; overlay source = raw ML Kit
-    // point with no extra mirror") is exercised in production.
+    // Canonical landmarks: raw ML Kit upright points — no mirror, no crop adjustment.
+    // Front and back produce identical canonical coords per the upright-top-left-unmirrored contract.
     val rawLandmarks = collectRawPosePoints(pose)
     val landmarks = rawLandmarks.map { point ->
       val mapped = PoseCoordinateMapper.mapPoint(
@@ -455,30 +435,26 @@ class WakeFitPoseCameraView(
         pointY = point.y,
         rawWidth = sourceWidth,
         rawHeight = sourceHeight,
-        cropLeft = cropRect.left,
-        cropTop = cropRect.top,
-        cropRight = cropRect.right,
-        cropBottom = cropRect.bottom,
         rotationDegrees = rotationDegrees,
-        isFrontCamera = isFrontCamera,
       )
       point.copy(x = mapped.canonicalX, y = mapped.canonicalY)
     }
 
     if (!loggedFirstPose && landmarks.isNotEmpty()) {
       loggedFirstPose = true
-      Log.i(TAG, "first pose landmarks=${landmarks.size} canonical=${uprightWidth}x${uprightHeight}")
+      Log.i(TAG, "first pose landmarks=${landmarks.size} canonical=${uprightWidth}x$uprightHeight facing=$frameFacing")
     }
 
-    // Compute overlay transformation using CameraX official API
+    // Compute overlay transformation using CameraX official API.
+    // CameraX handles all rotation, crop and front-mirror internally.
     val overlayMatrix = computeOverlayTransform(imageProxy)
 
-    // Update overlay - pass null matrix if transform not available
+    // Update overlay with raw ML Kit points (no pre-mirror).
     poseOverlayView.post {
       if (cameraStartToken != frameToken || !isAttachedToWindow || cameraFacingValue != frameFacing) {
         return@post
       }
-      poseOverlayView.updatePose(landmarks, overlayMatrix)
+      poseOverlayView.updatePose(rawLandmarks, overlayMatrix)
     }
 
     // Emit canonical PoseFrame to JS (even if overlay transform is not ready)
@@ -499,12 +475,20 @@ class WakeFitPoseCameraView(
    * Compute transformation matrix for overlay using CameraX official API.
    *
    * Contract: ML Kit PoseLandmark.position arrives in the **rotated-upright**
-   * pixel space (because we called `InputImage.fromMediaImage(mediaImage,
-   * rotationDegrees)`). The canonical PoseFrame we ship to JS is exactly
-   * those upright coords (mirrored once for front camera via
-   * [PoseCoordinateMapper]). The overlay is fed the same canonical
-   * coordinates, and the CameraX factory / OutputTransform pipeline maps
-   * them onto the PreviewView.
+   * pixel space. The overlay Matrix must be built from the same raw ML Kit
+   * upright points that we send to JS.
+   *
+   * We configure the factory with:
+   *   - setUsingCropRect(false): ML Kit coordinates are NOT in crop-local
+   *     space — they are in the full upright image space where (0,0) is the
+   *     top-left of the upright image. CameraX cropRect is a separate concept
+   *     that describes which region of the raw sensor buffer was analyzed.
+   *   - setUsingRotationDegrees(true): CameraX applies the rotation
+   *     internally; we feed the already-rotated ML Kit points as-is.
+   *
+   * The output Matrix maps ML Kit upright points → PreviewView pixels.
+   * CameraX handles front-camera mirroring automatically through the
+   * Preview/OutputTransform pipeline.
    *
    * Returns null if transforms are not available, in which case the overlay
    * will not be drawn but canonical PoseFrame will still be sent to JS.
@@ -514,13 +498,10 @@ class WakeFitPoseCameraView(
     val targetTransform = previewView.outputTransform ?: return null
 
     // Create source transformation from ImageProxy.
-    // We keep the CameraX defaults (using cropRect + rotation degrees)
-    // because the UseCaseGroup ViewPort ensures Preview and ImageAnalysis
-    // share the same cropRect, so ML Kit's upright pixel coords line up
-    // with the matrix after the factory applies the corresponding
-    // translation and rotation.
+    // setUsingCropRect(false): ML Kit points are in full upright image space,
+    // not crop-local. setUsingRotationDegrees(true): CameraX applies rotation.
     val factory = ImageProxyTransformFactory()
-    factory.setUsingCropRect(true)
+    factory.setUsingCropRect(false)
     factory.setUsingRotationDegrees(true)
 
     val sourceTransform = factory.getOutputTransform(imageProxy)

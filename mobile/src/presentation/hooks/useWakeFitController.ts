@@ -635,7 +635,8 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
       return;
     }
 
-    // Evaluate pose quality first - do not count if quality is not ok
+    // Evaluate pose quality — drives the UI guidance but does NOT gate the counter.
+    // The counter needs invalid frames so it can time out incomplete actions (>700ms).
     const quality = evaluatePoseQuality(frame, { exerciseType: currentSnapshot.exerciseType });
 
     if (quality.issue !== lastPoseQualityIssueRef.current) {
@@ -644,11 +645,9 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
       setPoseGuidance(quality.guidance);
     }
 
-    // Only process the frame if quality is ok
-    if (quality.issue !== 'ok') {
-      return;
-    }
-
+    // All valid PoseFrames reach the counter, regardless of quality.
+    // The counter uses the 700ms timeout to clean up incomplete actions
+    // when invalid frames persist (e.g. body leaves frame).
     const nextSnapshot = flow.handlePoseFrame(frame);
     if (isSnapshotUserVisibleChange(lastCommittedSnapshotRef.current, nextSnapshot)) {
       lastCommittedSnapshotRef.current = nextSnapshot;
