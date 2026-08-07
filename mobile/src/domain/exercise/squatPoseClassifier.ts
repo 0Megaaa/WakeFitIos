@@ -70,11 +70,13 @@ const REQUIRED_LANDMARK_NAMES = [
  * 2. Hip angle as secondary check (consistent with knee angle)
  * 3. hipDropRatio ensures actual depth (hip must move down relative to standing baseline)
  * 4. scaleChangeRatio detects camera movement vs actual squat
- * 5. Knee asymmetry detects lunge-like poses
+ * 5. Knee asymmetry - for Apple Vision, treated as warning not rejection
  *
- * All ratios are calculated relative to standing baseline:
- * - hipDropRatio = (currentMidHipY - standingBaselineHipY) / standingBaselineScale
- * - scaleChangeRatio = |currentPoseScale - standingBaselineScale| / standingBaselineScale
+ * Apple Vision relaxations:
+ * - Lower confidence threshold (0.35 vs 0.55)
+ * - too_far exemption during squat (body compresses naturally)
+ * - Relaxed fallback: simple knee angle check
+ * - Knee asymmetry as warning, not rejection
  */
 export const THRESHOLDS = {
   /** Knee angle >= this = confident standing */
@@ -93,17 +95,41 @@ export const THRESHOLDS = {
   MAX_SCALE_CHANGE_RATIO: 0.30,
   /** Maximum knee angle asymmetry (detects lunge) */
   MAX_KNEE_ASYMMETRY: 30,
+  // Apple Vision relaxed thresholds
+  APPLE_VISION_KNEE_DOWN_RELAXED: 130,
+  APPLE_VISION_KNEE_DOWN_PARTIAL: 145,
+  APPLE_VISION_HIP_DROP_RATIO: 0.08,
+  APPLE_VISION_ASYMMETRY_WARNING: 45,
 } as const;
 
 const DEFAULT_MIN_CONFIDENCE = 0.55;
+const APPLE_VISION_MIN_CONFIDENCE = 0.35;
 const MIN_BODY_FILL_RATIO = 0.32;
 const MAX_BODY_FILL_RATIO = 0.92;
+
+/**
+ * Check if this is Apple Vision source
+ */
+function isAppleVision(frame: PoseFrame): boolean {
+  return frame.source === 'apple-vision';
+}
+
+/**
+ * Get effective minimum confidence for the frame.
+ * Apple Vision uses lower threshold for squat.
+ */
+function getEffectiveMinConfidence(frame: PoseFrame, options: SquatPoseClassifierOptions): number {
+  if (options.minConfidence !== undefined) {
+    return options.minConfidence;
+  }
+  return isAppleVision(frame) ? APPLE_VISION_MIN_CONFIDENCE : DEFAULT_MIN_CONFIDENCE;
+}
 
 export function classifySquatPoseFrame(
   frame: PoseFrame,
   options: SquatPoseClassifierOptions = {},
 ): SquatPoseClassification {
-  const minConfidence = options.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
+  const minConfidence = getEffectiveMinConfidence(frame, options);
   const bodyResult = getRequiredFullBody(frame, minConfidence);
   if (!bodyResult.body) {
     return unknown(bodyResult.qualityIssue);
@@ -125,7 +151,7 @@ export function classifySquatPoseFrame(
     return unknown('low_confidence');
   }
 
-  const label = classifyByGeometry(metrics, options);
+  const label = classifyByGeometry(metrics, options, frame);
   return {
     label,
     confidence,
@@ -134,21 +160,21 @@ export function classifySquatPoseFrame(
   };
 }
 
-function classifyByGeometry(metrics: SquatPoseMetrics, options: SquatPoseClassifierOptions): SquatPoseLabel {
+function classifyByGeometry(
+  metrics: SquatPoseMetrics,
+  options: SquatPoseClassifierOptions,
+  frame: PoseFrame,
+): SquatPoseLabel {
   const avgKnee = metrics.averageKneeAngle;
   const avgHip = metrics.averageHipAngle;
   const kneeDiff = Math.abs(metrics.leftKneeAngle - metrics.rightKneeAngle);
   const hipDropRatio = metrics.hipDropRatio;
   const scaleChangeRatio = metrics.scaleChangeRatio;
   const hasBaseline = options.standingBaselineHipY !== undefined && options.standingBaselineScale !== undefined;
+  const isAV = isAppleVision(frame);
 
   // Reject if scale change is too large (likely camera movement, not squat)
   if (scaleChangeRatio > THRESHOLDS.MAX_SCALE_CHANGE_RATIO) {
-    return 'unknown';
-  }
-
-  // Reject asymmetric knee angles (likely lunge or partial pose)
-  if (kneeDiff > THRESHOLDS.MAX_KNEE_ASYMMETRY) {
     return 'unknown';
   }
 
@@ -157,11 +183,24 @@ function classifyByGeometry(metrics: SquatPoseMetrics, options: SquatPoseClassif
     return 'standing';
   }
 
-  // Without baseline, cannot classify squatting (no reference for hip drop)
+  // Without baseline, use Apple Vision relaxed fallback
   if (!hasBaseline) {
+    if (isAV && avgKnee <= THRESHOLDS.APPLE_VISION_KNEE_DOWN_RELAXED) {
+      return 'squatting';
+    }
     return 'unknown';
   }
 
+  // ===== APPLE VISION RELAXED FALLBACK =====
+  // Apple Vision can use simpler squat detection with relaxed thresholds
+  if (isAV) {
+    const appleVisionResult = classifyAppleVisionRelaxed(metrics, kneeDiff);
+    if (appleVisionResult !== null) {
+      return appleVisionResult;
+    }
+  }
+
+  // ===== STRICT CLASSIFICATION (ML Kit and non-relaxed Apple Vision) =====
   // Squatting classification requires baseline for hipDropRatio
   // hipDropRatio > 0 means hip moved DOWN relative to standing baseline
 
@@ -186,6 +225,44 @@ function classifyByGeometry(metrics: SquatPoseMetrics, options: SquatPoseClassif
 
   // Shallow bend - likely not a squat
   return 'unknown';
+}
+
+/**
+ * Apple Vision relaxed squat classification.
+ * Uses simpler rules without requiring all strict conditions simultaneously.
+ *
+ * Fallback A: averageKneeAngle <= 130°
+ * Fallback B: hipDropRatio >= 0.08 AND averageKneeAngle <= 145°
+ *
+ * Knee asymmetry is a warning factor, not a hard rejection.
+ */
+function classifyAppleVisionRelaxed(
+  metrics: SquatPoseMetrics,
+  kneeDiff: number,
+): SquatPoseLabel | null {
+  const avgKnee = metrics.averageKneeAngle;
+  const hipDropRatio = metrics.hipDropRatio;
+
+  // Fallback A: obvious knee bend
+  if (avgKnee <= THRESHOLDS.APPLE_VISION_KNEE_DOWN_RELAXED) {
+    // Check if extremely asymmetric (likely not a squat)
+    if (kneeDiff > THRESHOLDS.APPLE_VISION_ASYMMETRY_WARNING) {
+      return 'unknown';
+    }
+    return 'squatting';
+  }
+
+  // Fallback B: hip drop with moderate knee bend
+  if (hipDropRatio >= THRESHOLDS.APPLE_VISION_HIP_DROP_RATIO && avgKnee <= THRESHOLDS.APPLE_VISION_KNEE_DOWN_PARTIAL) {
+    // Check if extremely asymmetric (likely not a squat)
+    if (kneeDiff > THRESHOLDS.APPLE_VISION_ASYMMETRY_WARNING) {
+      return 'unknown';
+    }
+    return 'squatting';
+  }
+
+  // No Apple Vision relaxed match
+  return null;
 }
 
 function getRequiredFullBody(
@@ -225,10 +302,15 @@ function getFrameFitIssue(frame: PoseFrame, body: Record<string, { x: number; y:
   const minY = Math.min(...points.map((point) => point.y));
   const maxY = Math.max(...points.map((point) => point.y));
   const fillRatio = (maxY - minY) / frame.imageHeight;
+
   if (fillRatio > MAX_BODY_FILL_RATIO) {
     return 'too_close';
   }
-  if (fillRatio < MIN_BODY_FILL_RATIO) {
+
+  // Apple Vision squat: skip too_far check
+  // Body naturally compresses during squat (shoulder→ankle span decreases)
+  // This is geometric compression, not actual camera distance change
+  if (fillRatio < MIN_BODY_FILL_RATIO && !isAppleVision(frame)) {
     return 'too_far';
   }
 

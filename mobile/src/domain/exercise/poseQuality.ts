@@ -87,12 +87,22 @@ function getGuidance(issue: PoseQualityIssue, exerciseType: string): string {
   return exerciseType === 'squat' ? SQUAT_GUIDANCE[issue] : PUSHUP_GUIDANCE[issue];
 }
 
+/**
+ * Evaluate pose quality and return guidance.
+ * 
+ * For Apple Vision squat exercise, bodyFillRatio checks are relaxed because:
+ * - During squat, body naturally compresses (shoulder→ankle span decreases)
+ * - This doesn't mean user is farther from camera
+ * - too_far threshold is not enforced for apple-vision squat
+ */
 export function evaluatePoseQuality(
   frame: PoseFrame,
   options: { exerciseType?: string; minConfidence?: number } = {},
 ): PoseQualityResult {
   const exerciseType = options.exerciseType ?? 'squat';
-  const minConfidence = options.minConfidence ?? 0.55;
+  // Apple Vision requires lower confidence threshold for squat
+  const isAppleVisionSquat = frame.source === 'apple-vision' && exerciseType === 'squat';
+  const minConfidence = isAppleVisionSquat ? 0.35 : (options.minConfidence ?? 0.55);
   const requiredLandmarks = getRequiredLandmarks(exerciseType);
 
   const byName = new Map<string, { x: number; y: number; confidence: number }>();
@@ -189,7 +199,10 @@ export function evaluatePoseQuality(
       };
     }
 
-    if (fillRatio < MIN_BODY_FILL_RATIO) {
+    // Apple Vision squat: skip too_far check during squat motion
+    // Body naturally compresses during squat (shoulder→ankle span decreases)
+    // This is geometric compression, not actual camera distance change
+    if (fillRatio < MIN_BODY_FILL_RATIO && !isAppleVisionSquat) {
       return {
         issue: 'too_far',
         guidance: getGuidance('too_far', exerciseType),

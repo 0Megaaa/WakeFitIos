@@ -17,8 +17,16 @@ const DEFAULT_MIN_CONFIDENCE = 0.55;
 const DEFAULT_MIN_STABLE_FRAMES = 2;
 const SQUAT_MIN_STABLE_FRAMES = 3;
 const BASELINE_SAMPLE_COUNT = 3;
+
+// Default timeouts (used for ML Kit)
 const MAX_TRANSITION_DURATION_MS = 2000;
 const INVALID_DURATION_THRESHOLD_MS = 700;
+
+// Apple Vision specific timeouts (relaxed)
+const APPLE_VISION_MAX_TRANSITION_DURATION_MS = 3500;
+const APPLE_VISION_INVALID_DURATION_THRESHOLD_MS = 1500;
+// Apple Vision requires only 2 stable frames for squat detection
+const APPLE_VISION_SQUAT_MIN_STABLE_FRAMES = 2;
 
 export function calculateAngle(a: { x: number; y: number }, vertex: { x: number; y: number }, c: { x: number; y: number }): number {
   const ab = { x: a.x - vertex.x, y: a.y - vertex.y };
@@ -119,25 +127,34 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
 }
 
 /**
- * Squat counter with real standing baseline tracking.
+ * Squat counter with Apple Vision relaxed rules.
  *
  * State machine:
  * 1. waiting_for_body: waiting for person to appear
  * 2. standing_ready: person is standing, baseline established (3+ samples)
- * 3. down_confirmed: person has gone down (squat detected)
+ * 3. down_confirmed: squat counted, waiting for re-standing to unlock next count
  *
- * A squat is counted when: standing_ready -> down_confirmed -> standing_ready
+ * Counting rule (iOS Apple Vision relaxed):
+ * - standing_ready -> squatting detected -> count + 1 immediately -> down_confirmed
+ * - down_confirmed -> standing -> standing_ready (unlocks next count, no +1)
+ *
+ * Key differences from ML Kit:
+ * - Count on squat (not after full cycle)
+ * - Relaxed confidence (0.35 vs 0.55)
+ * - Relaxed invalid timeout (1500ms vs 700ms)
+ * - Relaxed transition timeout (3500ms vs 2000ms)
+ * - Relaxed stable frame requirement (2 vs 3)
+ * - Apple Vision relaxed fallback for squat detection
  *
  * Frame classification:
  * - invalid: qualityIssue != 'ok' -> increases invalidFrameCount, may clear baseline
  * - standing: qualityIssue == 'ok' && label == 'standing' -> updates baseline
- * - squatting: qualityIssue == 'ok' && label == 'squatting' -> only from classifier
+ * - squatting: qualityIssue == 'ok' && label == 'squatting' -> counts squat
  * - transition: qualityIssue == 'ok' && label == 'unknown' -> time-based timeout
  */
 export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCounter {
   const targetCount = normalizeTargetCount(options.targetCount);
   const minConfidence = options.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
-  const minStableFrames = Math.max(SQUAT_MIN_STABLE_FRAMES, Math.trunc(options.minStableFrames ?? DEFAULT_MIN_STABLE_FRAMES));
 
   type Phase = 'waiting_for_body' | 'standing_ready' | 'down_confirmed';
 
@@ -156,6 +173,22 @@ export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCou
 
   // Invalid frame time gate (instead of fixed 3-frame counter)
   let invalidStartTimestampMs: number | null = null;
+
+  function isAppleVision(frame: PoseFrame): boolean {
+    return frame.source === 'apple-vision';
+  }
+
+  function getMinStableFrames(frame: PoseFrame): number {
+    return isAppleVision(frame) ? APPLE_VISION_SQUAT_MIN_STABLE_FRAMES : SQUAT_MIN_STABLE_FRAMES;
+  }
+
+  function getInvalidThreshold(frame: PoseFrame): number {
+    return isAppleVision(frame) ? APPLE_VISION_INVALID_DURATION_THRESHOLD_MS : INVALID_DURATION_THRESHOLD_MS;
+  }
+
+  function getTransitionThreshold(frame: PoseFrame): number {
+    return isAppleVision(frame) ? APPLE_VISION_MAX_TRANSITION_DURATION_MS : MAX_TRANSITION_DURATION_MS;
+  }
 
   function getBaselineHipY(): number | null {
     if (baselineHipYSamples.length === 0) return null;
@@ -213,6 +246,11 @@ export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCou
 
       lastKneeAngle = classification.metrics?.averageKneeAngle ?? null;
 
+      // Get source-specific thresholds
+      const invalidThreshold = getInvalidThreshold(frame);
+      const transitionThreshold = getTransitionThreshold(frame);
+      const minStableFrames = getMinStableFrames(frame);
+
       // Handle invalid frames (qualityIssue != 'ok')
       if (classification.qualityIssue !== 'ok') {
         if (invalidStartTimestampMs === null) {
@@ -221,7 +259,7 @@ export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCou
 
         // If too long in invalid state, reset to waiting
         const invalidDuration = frame.timestampMs - invalidStartTimestampMs;
-        if (phase === 'waiting_for_body' || invalidDuration >= INVALID_DURATION_THRESHOLD_MS) {
+        if (phase === 'waiting_for_body' || invalidDuration >= invalidThreshold) {
           phase = 'waiting_for_body';
           currentPose = null;
           currentPoseFrames = 0;
@@ -244,7 +282,7 @@ export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCou
 
         // Check if transition timeout exceeded
         const transitionElapsed = frame.timestampMs - transitionStartTime;
-        if (transitionElapsed > MAX_TRANSITION_DURATION_MS) {
+        if (transitionElapsed > transitionThreshold) {
           // Transition taking too long - likely not a valid squat sequence
           phase = 'waiting_for_body';
           currentPose = null;
@@ -306,17 +344,38 @@ export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCou
         return currentResult(true);
       }
 
-      // standing_ready -> down_confirmed
-      if (phase === 'standing_ready' && observedPose === 'squatting') {
-        phase = 'down_confirmed';
-        return currentResult(true);
-      }
+      // ===== COUNTING LOGIC =====
+      // Apple Vision: count +1 on squat, unlock on standing
+      // ML Kit: count +1 only after full standing → squat → standing cycle
 
-      // down_confirmed -> standing_ready, count += 1
-      if (phase === 'down_confirmed' && observedPose === 'standing') {
-        count += 1;
-        phase = 'standing_ready';
-        return currentResult(true);
+      if (isAppleVision(frame)) {
+        // Apple Vision relaxed: count on squat immediately
+        // standing_ready -> squatting: count + 1 immediately
+        if (phase === 'standing_ready' && observedPose === 'squatting') {
+          count += 1;
+          phase = 'down_confirmed';
+          return currentResult(true);
+        }
+
+        // down_confirmed -> standing: unlock next count (no +1)
+        if (phase === 'down_confirmed' && observedPose === 'standing') {
+          phase = 'standing_ready';
+          return currentResult(true);
+        }
+      } else {
+        // ML Kit: count only after full standing → squat → standing cycle
+        // standing_ready -> squatting: just go to down_confirmed (no count)
+        if (phase === 'standing_ready' && observedPose === 'squatting') {
+          phase = 'down_confirmed';
+          return currentResult(true);
+        }
+
+        // down_confirmed -> standing: count + 1 and go back to ready
+        if (phase === 'down_confirmed' && observedPose === 'standing') {
+          count += 1;
+          phase = 'standing_ready';
+          return currentResult(true);
+        }
       }
 
       return currentResult(true);

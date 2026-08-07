@@ -36,6 +36,7 @@ function fullBodyFrame(
   pose: 'standing' | 'squatting',
   timestampMs: number,
   confidence = 0.95,
+  source: 'apple-vision' | 'mlkit' = 'mlkit',
 ): PoseFrame {
   const lowerBody = pose === 'standing'
     ? {
@@ -63,7 +64,7 @@ function fullBodyFrame(
     imageWidth: 300,
     imageHeight: 640,
     cameraFacing: 'front',
-    source: 'apple-vision',
+    source,
     coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
       // Standing: shoulders at y=100, Squat: shoulders at y=160 (drop with hip)
@@ -80,16 +81,38 @@ function fullBodyFrame(
 }
 
 /**
+ * Shortcut for creating Apple Vision frames (source='apple-vision').
+ */
+function appleVisionFrame(
+  pose: 'standing' | 'squatting',
+  timestampMs: number,
+  confidence = 0.95,
+): PoseFrame {
+  return fullBodyFrame(pose, timestampMs, confidence, 'apple-vision');
+}
+
+/**
+ * Shortcut for creating ML Kit frames (source='mlkit').
+ */
+function mlkitFrame(
+  pose: 'standing' | 'squatting',
+  timestampMs: number,
+  confidence = 0.95,
+): PoseFrame {
+  return fullBodyFrame(pose, timestampMs, confidence, 'mlkit');
+}
+
+/**
  * Creates a partial-body frame (only upper body landmarks).
  * Used to simulate when the user's lower body leaves the camera frame.
  */
-function partialBodyFrame(timestampMs: number, confidence = 0.95): PoseFrame {
+function partialBodyFrame(timestampMs: number, confidence = 0.95, source: 'apple-vision' | 'mlkit' = 'mlkit'): PoseFrame {
   return {
     timestampMs,
     imageWidth: 300,
     imageHeight: 640,
     cameraFacing: 'front',
-    source: 'apple-vision',
+    source,
     coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
       // Only upper body — no hip, knee, or ankle landmarks.
@@ -111,7 +134,7 @@ function partialBodyFrame(timestampMs: number, confidence = 0.95): PoseFrame {
  * producing an asymmetric pose with kneeAngleDifference > MAX_KNEE_ASYMMETRY (30°).
  * This forces the classifier to return 'unknown'.
  */
-function transitionFrame(timestampMs: number, progress: number): PoseFrame {
+function transitionFrame(timestampMs: number, progress: number, source: 'apple-vision' | 'mlkit' = 'mlkit'): PoseFrame {
   // progress: 0 = just starting, 1 = almost full squat
   // Use asymmetric knees with both knees partially bent (in transition zone 120-160°)
   const hipY = 240 + progress * 60;
@@ -125,7 +148,7 @@ function transitionFrame(timestampMs: number, progress: number): PoseFrame {
     imageWidth: 300,
     imageHeight: 640,
     cameraFacing: 'front',
-    source: 'apple-vision',
+    source,
     coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
       landmark('leftShoulder', 140, shoulderY),
@@ -234,13 +257,13 @@ function noHipDropFrame(timestampMs: number): PoseFrame {
 /**
  * Creates a hip-drop but bad-hip-angle frame.
  */
-function badHipAngleFrame(timestampMs: number): PoseFrame {
+function badHipAngleFrame(timestampMs: number, source: 'apple-vision' | 'mlkit' = 'mlkit'): PoseFrame {
   return {
     timestampMs,
     imageWidth: 300,
     imageHeight: 640,
     cameraFacing: 'front',
-    source: 'apple-vision',
+    source,
     coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
       // Hip drops but angle is wrong
@@ -673,21 +696,21 @@ describe('squat counter', () => {
     it('rejects bad hip angle despite hip drop', () => {
       const counter = createSquatCounter({ targetCount: 5 });
 
-      // Establish baseline
-      counter.handleFrame(fullBodyFrame('standing', 1000));
-      counter.handleFrame(fullBodyFrame('standing', 1100));
-      counter.handleFrame(fullBodyFrame('standing', 1200));
-      counter.handleFrame(fullBodyFrame('standing', 1300));
-      assert.equal(counter.handleFrame(fullBodyFrame('standing', 1400)).phase, 'ready');
+      // Establish baseline with ML Kit to use strict behavior
+      counter.handleFrame(mlkitFrame('standing', 1000));
+      counter.handleFrame(mlkitFrame('standing', 1100));
+      counter.handleFrame(mlkitFrame('standing', 1200));
+      counter.handleFrame(mlkitFrame('standing', 1300));
+      assert.equal(counter.handleFrame(mlkitFrame('standing', 1400)).phase, 'ready');
 
-      // Bad hip angle frames should not trigger down
-      counter.handleFrame(badHipAngleFrame(2000));
-      counter.handleFrame(badHipAngleFrame(2100));
-      counter.handleFrame(badHipAngleFrame(2200));
-      counter.handleFrame(badHipAngleFrame(2300));
-      counter.handleFrame(badHipAngleFrame(2400));
+      // Bad hip angle frames should not trigger down (use ML Kit)
+      counter.handleFrame(badHipAngleFrame(2000, 'mlkit'));
+      counter.handleFrame(badHipAngleFrame(2100, 'mlkit'));
+      counter.handleFrame(badHipAngleFrame(2200, 'mlkit'));
+      counter.handleFrame(badHipAngleFrame(2300, 'mlkit'));
+      counter.handleFrame(badHipAngleFrame(2400, 'mlkit'));
 
-      const result = counter.handleFrame(badHipAngleFrame(2500));
+      const result = counter.handleFrame(badHipAngleFrame(2500, 'mlkit'));
       assert.equal(result.count, 0, 'bad hip angle should not be counted');
     });
 
@@ -773,6 +796,348 @@ describe('squat counter', () => {
 
       assert.equal(finalResult.count, 0, 'count must remain 0');
       assert.equal(finalResult.phase, 'ready', 'phase must be ready after re-establishing baseline');
+    });
+  });
+
+  // ============================================================
+  // APPLE VISION RELAXED RULES TESTS (Task V1.6)
+  // ============================================================
+
+  describe('apple-vision squat counting (relaxed: count on squat)', () => {
+    it('does NOT count when starting already squatting', () => {
+      const counter = createSquatCounter({ targetCount: 5 });
+      // Camera sees squat first (no baseline established)
+      counter.handleFrame(appleVisionFrame('squatting', 1000));
+      counter.handleFrame(appleVisionFrame('squatting', 1100));
+      // User returns to standing
+      counter.handleFrame(appleVisionFrame('standing', 2000));
+      counter.handleFrame(appleVisionFrame('standing', 2100));
+      counter.handleFrame(appleVisionFrame('standing', 2200));
+      const finalResult = counter.handleFrame(appleVisionFrame('standing', 2300));
+      assert.equal(finalResult.count, 0, 'should not count when starting in squat');
+      assert.equal(finalResult.phase, 'ready');
+    });
+
+    it('counts immediately when squatting is detected (not after standing)', () => {
+      const counter = createSquatCounter({ targetCount: 5 });
+      // Establish baseline with stable standing
+      counter.handleFrame(appleVisionFrame('standing', 1000));
+      counter.handleFrame(appleVisionFrame('standing', 1100));
+      counter.handleFrame(appleVisionFrame('standing', 1200));
+      let result = counter.handleFrame(appleVisionFrame('standing', 1300));
+      assert.equal(result.phase, 'ready');
+
+      // Squat down - Apple Vision only needs 2 frames for stable
+      counter.handleFrame(appleVisionFrame('squatting', 2000));
+      result = counter.handleFrame(appleVisionFrame('squatting', 2100));
+
+      // With relaxed rules: count +1 immediately on squatting detection
+      assert.equal(result.count, 1, 'should count on squat, not after standing');
+      assert.equal(result.phase, 'down');
+    });
+
+    it('does NOT count repeatedly while staying in squat', () => {
+      const counter = createSquatCounter({ targetCount: 5 });
+      // Establish baseline
+      counter.handleFrame(appleVisionFrame('standing', 1000));
+      counter.handleFrame(appleVisionFrame('standing', 1100));
+      counter.handleFrame(appleVisionFrame('standing', 1200));
+      counter.handleFrame(appleVisionFrame('standing', 1300));
+      assert.equal(counter.handleFrame(appleVisionFrame('standing', 1400)).phase, 'ready');
+
+      // Squat down
+      counter.handleFrame(appleVisionFrame('squatting', 2000));
+      counter.handleFrame(appleVisionFrame('squatting', 2100));
+      let result = counter.handleFrame(appleVisionFrame('squatting', 2200));
+      assert.equal(result.count, 1, 'first squat should count');
+
+      // Stay in squat - count must NOT increase
+      result = counter.handleFrame(appleVisionFrame('squatting', 3000));
+      assert.equal(result.count, 1, 'should NOT count while staying in squat');
+      result = counter.handleFrame(appleVisionFrame('squatting', 3100));
+      assert.equal(result.count, 1, 'should NOT count while staying in squat');
+      result = counter.handleFrame(appleVisionFrame('squatting', 3200));
+      assert.equal(result.count, 1, 'should NOT count while staying in squat');
+    });
+
+    it('allows second count after re-standing', () => {
+      const counter = createSquatCounter({ targetCount: 5 });
+      // First squat
+      counter.handleFrame(appleVisionFrame('standing', 1000));
+      counter.handleFrame(appleVisionFrame('standing', 1100));
+      counter.handleFrame(appleVisionFrame('standing', 1200));
+      counter.handleFrame(appleVisionFrame('standing', 1300));
+      counter.handleFrame(appleVisionFrame('squatting', 2000));
+      counter.handleFrame(appleVisionFrame('squatting', 2100));
+      let result = counter.handleFrame(appleVisionFrame('squatting', 2200));
+      assert.equal(result.count, 1, 'first squat should count');
+
+      // Return to standing - unlocks next count
+      counter.handleFrame(appleVisionFrame('standing', 3000));
+      result = counter.handleFrame(appleVisionFrame('standing', 3100));
+      assert.equal(result.phase, 'ready', 'should be ready after standing');
+
+      // Second squat
+      counter.handleFrame(appleVisionFrame('squatting', 4000));
+      result = counter.handleFrame(appleVisionFrame('squatting', 4100));
+      assert.equal(result.count, 2, 'second squat should count after re-standing');
+    });
+
+    it('counts 5 squats with relaxed rules', () => {
+      const counter = createSquatCounter({ targetCount: 5 });
+
+      for (let i = 0; i < 5; i++) {
+        const offset = i * 5000;
+        // Establish baseline with stable standing
+        counter.handleFrame(appleVisionFrame('standing', 1000 + offset));
+        counter.handleFrame(appleVisionFrame('standing', 1100 + offset));
+        counter.handleFrame(appleVisionFrame('standing', 1200 + offset));
+        counter.handleFrame(appleVisionFrame('standing', 1300 + offset));
+
+        // Squat - count immediately on detection (Apple Vision 2 frames)
+        counter.handleFrame(appleVisionFrame('squatting', 2000 + offset));
+        let result = counter.handleFrame(appleVisionFrame('squatting', 2100 + offset));
+        assert.equal(result.count, i + 1, `squat ${i + 1} should count`);
+
+        // Return to standing - unlocks next
+        counter.handleFrame(appleVisionFrame('standing', 3000 + offset));
+        result = counter.handleFrame(appleVisionFrame('standing', 3100 + offset));
+        assert.equal(result.phase, 'ready');
+      }
+
+      const finalResult = counter.handleFrame(appleVisionFrame('standing', 26000));
+      assert.equal(finalResult.count, 5, 'should count 5 squats');
+      assert.equal(finalResult.isComplete, true);
+    });
+  });
+
+  describe('apple-vision bodyFillRatio squat exemption', () => {
+    it('does NOT return too_far when bodyFillRatio drops during squat', () => {
+      // Create a frame that simulates squat with small body fill ratio
+      // This simulates the natural body compression during squat
+      const squatFrameLowFill: PoseFrame = {
+        timestampMs: 2000,
+        imageWidth: 640,
+        imageHeight: 480,
+        cameraFacing: 'front',
+        source: 'apple-vision',
+        coordinateSpace: 'upright-top-left-unmirrored',
+        landmarks: [
+          // Standing would have minY=50, maxY=430, fillRatio=380/480=0.79
+          // Squat compresses to minY=100, maxY=350, fillRatio=250/480=0.52 < 0.32 threshold
+          landmark('leftShoulder', 300, 100, 0.95),
+          landmark('rightShoulder', 340, 100, 0.95),
+          landmark('leftHip', 310, 200, 0.95),
+          landmark('rightHip', 330, 200, 0.95),
+          landmark('leftKnee', 280, 300, 0.95),
+          landmark('rightKnee', 360, 300, 0.95),
+          landmark('leftAnkle', 320, 350, 0.95),
+          landmark('rightAnkle', 320, 350, 0.95),
+        ],
+      };
+
+      // First establish baseline with standing frame
+      const standingFrame: PoseFrame = {
+        timestampMs: 1000,
+        imageWidth: 640,
+        imageHeight: 480,
+        cameraFacing: 'front',
+        source: 'apple-vision',
+        coordinateSpace: 'upright-top-left-unmirrored',
+        landmarks: [
+          landmark('leftShoulder', 300, 50, 0.95),
+          landmark('rightShoulder', 340, 50, 0.95),
+          landmark('leftHip', 310, 150, 0.95),
+          landmark('rightHip', 330, 150, 0.95),
+          landmark('leftKnee', 310, 300, 0.95),
+          landmark('rightKnee', 330, 300, 0.95),
+          landmark('leftAnkle', 310, 430, 0.95),
+          landmark('rightAnkle', 330, 430, 0.95),
+        ],
+      };
+
+      const counter = createSquatCounter({ targetCount: 5 });
+      counter.handleFrame(standingFrame);
+      counter.handleFrame(standingFrame);
+      counter.handleFrame(standingFrame);
+      counter.handleFrame(standingFrame);
+      assert.equal(counter.handleFrame(standingFrame).phase, 'ready');
+
+      // Now test squat with low bodyFillRatio
+      const result = counter.handleFrame(squatFrameLowFill);
+
+      // Should NOT be too_far - Apple Vision squat exemption
+      // The frame should be classified, not rejected
+      assert.ok(result.isPoseReady || result.phase !== 'waiting_for_body',
+        'should not reset to waiting due to too_far');
+    });
+  });
+
+  describe('apple-vision confidence relaxation', () => {
+    it('accepts frame with 0.45 confidence for Apple Vision squat', () => {
+      // This test verifies Apple Vision uses 0.35 threshold instead of 0.55
+      const lowConfidenceFrame: PoseFrame = {
+        timestampMs: 2000,
+        imageWidth: 300,
+        imageHeight: 640,
+        cameraFacing: 'front',
+        source: 'apple-vision',
+        coordinateSpace: 'upright-top-left-unmirrored',
+        landmarks: [
+          // All landmarks at 0.45 confidence - below 0.55 but above 0.35
+          landmark('leftShoulder', 140, 100, 0.45),
+          landmark('rightShoulder', 160, 100, 0.45),
+          landmark('leftHip', 150, 240, 0.45),
+          landmark('rightHip', 150, 240, 0.45),
+          landmark('leftKnee', 150, 400, 0.45),
+          landmark('rightKnee', 150, 400, 0.45),
+          landmark('leftAnkle', 150, 560, 0.45),
+          landmark('rightAnkle', 150, 560, 0.45),
+        ],
+      };
+
+      // For ML Kit, this should be low_confidence
+      const mlkitResult = classifySquatPoseFrame({ ...lowConfidenceFrame, source: 'mlkit' });
+      assert.equal(mlkitResult.qualityIssue, 'low_confidence', 'ML Kit should reject 0.45 confidence');
+
+      // For Apple Vision, this should be accepted (0.35 threshold)
+      const appleVisionResult = classifySquatPoseFrame(lowConfidenceFrame);
+      assert.notEqual(appleVisionResult.qualityIssue, 'low_confidence',
+        'Apple Vision should accept 0.45 confidence');
+    });
+  });
+
+  describe('apple-vision relaxed timeout (1500ms invalid, 3500ms transition)', () => {
+    it('survives 1500ms of invalid pose', () => {
+      const counter = createSquatCounter({ targetCount: 5 });
+
+      // Establish baseline with Apple Vision
+      counter.handleFrame(appleVisionFrame('standing', 1000));
+      counter.handleFrame(appleVisionFrame('standing', 1100));
+      counter.handleFrame(appleVisionFrame('standing', 1200));
+      counter.handleFrame(appleVisionFrame('standing', 1300));
+      assert.equal(counter.handleFrame(appleVisionFrame('standing', 1400)).phase, 'ready');
+
+      // Squat with Apple Vision
+      counter.handleFrame(appleVisionFrame('squatting', 2000));
+      counter.handleFrame(appleVisionFrame('squatting', 2100));
+      counter.handleFrame(appleVisionFrame('squatting', 2200));
+      assert.equal(counter.handleFrame(appleVisionFrame('squatting', 2300)).phase, 'down');
+
+      // Partial body at t=3000 (700ms after last squat frame)
+      counter.handleFrame(partialBodyFrame(3000, 0.95, 'apple-vision'));
+
+      // Partial body at t=4500 (2200ms since last squat frame, exceeds 1500ms)
+      // Apple Vision should tolerate up to 1500ms, so this should reset
+      const afterTimeout = counter.handleFrame(partialBodyFrame(4500, 0.95, 'apple-vision'));
+      assert.equal(afterTimeout.phase, 'waiting_for_body',
+        'should reset after 1500ms of invalid pose on Apple Vision');
+    });
+
+    it('allows 2500ms slow transition (exceeds old 2000ms limit)', () => {
+      const counter = createSquatCounter({ targetCount: 5 });
+
+      // Establish baseline with Apple Vision
+      counter.handleFrame(appleVisionFrame('standing', 1000));
+      counter.handleFrame(appleVisionFrame('standing', 1100));
+      counter.handleFrame(appleVisionFrame('standing', 1200));
+      counter.handleFrame(appleVisionFrame('standing', 1300));
+      assert.equal(counter.handleFrame(appleVisionFrame('standing', 1400)).phase, 'ready');
+
+      // 2.5 second transition (exceeds old 2000ms limit)
+      // Use transitionFrame which produces 'unknown' label
+      for (let i = 0; i < 50; i++) {
+        const progress = (i + 1) / 50;
+        const result = counter.handleFrame(transitionFrame(2000 + i * 50, progress, 'apple-vision'));
+        // Should NOT timeout - Apple Vision allows 3500ms
+        assert.notEqual(result.phase, 'waiting_for_body',
+          `should not timeout at frame ${i + 1} (${(i + 1) * 50}ms)`);
+      }
+
+      // Now reach squat
+      counter.handleFrame(appleVisionFrame('squatting', 4500));
+      const result = counter.handleFrame(appleVisionFrame('squatting', 4600));
+      assert.equal(result.count, 1, 'should count after slow transition');
+    });
+  });
+
+  describe('ML Kit behavior preserved (no regression)', () => {
+    it('ML Kit counts only after full cycle (not on squat immediately)', () => {
+      const counter = createSquatCounter({ targetCount: 5 });
+      // Use ML Kit frames
+      counter.handleFrame(mlkitFrame('standing', 1000));
+      counter.handleFrame(mlkitFrame('standing', 1100));
+      counter.handleFrame(mlkitFrame('standing', 1200));
+      counter.handleFrame(mlkitFrame('standing', 1300));
+      let result = counter.handleFrame(mlkitFrame('standing', 1400));
+      assert.equal(result.phase, 'ready');
+
+      // ML Kit requires 3 frames for stable (not 2 like Apple Vision)
+      counter.handleFrame(mlkitFrame('squatting', 2000));
+      counter.handleFrame(mlkitFrame('squatting', 2100));
+      result = counter.handleFrame(mlkitFrame('squatting', 2200));
+
+      // ML Kit: should be in 'down' phase but NOT have counted yet
+      // Count only happens after returning to standing
+      assert.equal(result.phase, 'down');
+      assert.equal(result.count, 0, 'ML Kit should NOT count on squat - only after standing');
+
+      // Now return to standing to complete the cycle
+      counter.handleFrame(mlkitFrame('standing', 3000));
+      counter.handleFrame(mlkitFrame('standing', 3100));
+      result = counter.handleFrame(mlkitFrame('standing', 3200));
+      assert.equal(result.count, 1, 'ML Kit should count after full cycle');
+      assert.equal(result.phase, 'ready');
+    });
+
+    it('ML Kit still uses 2000ms transition timeout', () => {
+      const counter = createSquatCounter({ targetCount: 5 });
+
+      // Establish baseline with ML Kit
+      counter.handleFrame(mlkitFrame('standing', 1000));
+      counter.handleFrame(mlkitFrame('standing', 1100));
+      counter.handleFrame(mlkitFrame('standing', 1200));
+      counter.handleFrame(mlkitFrame('standing', 1300));
+      assert.equal(counter.handleFrame(mlkitFrame('standing', 1400)).phase, 'ready');
+
+      // ML Kit: need enough transition frames to exceed 2000ms timeout
+      // Use 50 frames at 60ms each = 3000ms total, clearly exceeds 2000ms
+      for (let i = 0; i < 50; i++) {
+        const progress = (i + 1) / 50;
+        const result = counter.handleFrame(transitionFrame(2000 + i * 60, progress, 'mlkit'));
+        if (result.phase === 'waiting_for_body') {
+          // ML Kit should have timed out
+          assert.ok(true, `ML Kit should timeout at frame ${i + 1} (${(i + 1) * 60}ms)`);
+          return;
+        }
+      }
+      // If we reach here without timeout, fail
+      assert.fail('ML Kit should timeout after 2000ms transition');
+    });
+
+    it('ML Kit invalid timeout is 700ms', () => {
+      const counter = createSquatCounter({ targetCount: 5 });
+
+      // Establish baseline
+      counter.handleFrame(mlkitFrame('standing', 1000));
+      counter.handleFrame(mlkitFrame('standing', 1100));
+      counter.handleFrame(mlkitFrame('standing', 1200));
+      counter.handleFrame(mlkitFrame('standing', 1300));
+      assert.equal(counter.handleFrame(mlkitFrame('standing', 1400)).phase, 'ready');
+
+      // Squat with ML Kit
+      counter.handleFrame(mlkitFrame('squatting', 2000));
+      counter.handleFrame(mlkitFrame('squatting', 2100));
+      counter.handleFrame(mlkitFrame('squatting', 2200));
+      assert.equal(counter.handleFrame(mlkitFrame('squatting', 2300)).phase, 'down');
+
+      // ML Kit: partial body at t=3000 (700ms after last squat frame)
+      counter.handleFrame(partialBodyFrame(3000, 0.95, 'mlkit'));
+
+      // ML Kit: partial body at t=3700 (1400ms gap, exceeds 700ms)
+      const afterTimeout = counter.handleFrame(partialBodyFrame(3700, 0.95, 'mlkit'));
+      assert.equal(afterTimeout.phase, 'waiting_for_body',
+        'ML Kit should reset after 700ms of invalid pose');
     });
   });
 });

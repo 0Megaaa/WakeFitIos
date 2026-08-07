@@ -92,7 +92,7 @@ function completeSquattingEvent(timestampMs: number, overrides: Partial<NativePo
     imageWidth: 640,
     imageHeight: 480,
     cameraFacing: 'front',
-    source: 'apple-vision',
+    source: 'mlkit', // Default to ML Kit to preserve existing test behavior
     coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
       // Squat: torso leans forward (symmetric), hip drops, knees very forward (symmetric)
@@ -579,12 +579,14 @@ describe('PoseFrame contract consistency', () => {
     it('counts squat when using PoseFrame from adapter', () => {
       const counter = createSquatCounter({ targetCount: 5 });
 
+      // Use same source (apple-vision) for all frames to match existing test setup
       const f1 = nativePoseEventToFrame(completeStandingEvent(1000));
       const f2 = nativePoseEventToFrame(completeStandingEvent(1100));
       const f3 = nativePoseEventToFrame(completeStandingEvent(1200));
-      const f4 = nativePoseEventToFrame(completeSquattingEvent(2000));
-      const f5 = nativePoseEventToFrame(completeSquattingEvent(2100));
-      const f6 = nativePoseEventToFrame(completeSquattingEvent(2200));
+      // Create squatting event with same source as standing
+      const f4 = nativePoseEventToFrame(completeSquattingEvent(2000, { source: 'apple-vision' }));
+      const f5 = nativePoseEventToFrame(completeSquattingEvent(2100, { source: 'apple-vision' }));
+      const f6 = nativePoseEventToFrame(completeSquattingEvent(2200, { source: 'apple-vision' }));
       const f7 = nativePoseEventToFrame(completeStandingEvent(3000));
       const f8 = nativePoseEventToFrame(completeStandingEvent(3100));
       const f9 = nativePoseEventToFrame(completeStandingEvent(3200));
@@ -606,9 +608,9 @@ describe('PoseFrame contract consistency', () => {
     it('does not count when starting already squatting', () => {
       const counter = createSquatCounter({ targetCount: 5 });
 
-      // Camera sees squat first
-      const f1 = nativePoseEventToFrame(completeSquattingEvent(1000));
-      const f2 = nativePoseEventToFrame(completeSquattingEvent(1100));
+      // Camera sees squat first (apple-vision to match standing source)
+      const f1 = nativePoseEventToFrame(completeSquattingEvent(1000, { source: 'apple-vision' }));
+      const f2 = nativePoseEventToFrame(completeSquattingEvent(1100, { source: 'apple-vision' }));
       // User returns to standing
       const f3 = nativePoseEventToFrame(completeStandingEvent(2000));
       const f4 = nativePoseEventToFrame(completeStandingEvent(2100));
@@ -629,9 +631,9 @@ describe('PoseFrame contract consistency', () => {
     it('does not count until full standing → squatting → standing cycle', () => {
       const counter = createSquatCounter({ targetCount: 5 });
 
-      // Start already squatting
-      const f1 = nativePoseEventToFrame(completeSquattingEvent(1000));
-      const f2 = nativePoseEventToFrame(completeSquattingEvent(1100));
+      // Start already squatting (apple-vision to match standing source)
+      const f1 = nativePoseEventToFrame(completeSquattingEvent(1000, { source: 'apple-vision' }));
+      const f2 = nativePoseEventToFrame(completeSquattingEvent(1100, { source: 'apple-vision' }));
       // Return to standing
       const f3 = nativePoseEventToFrame(completeStandingEvent(2000));
       const f4 = nativePoseEventToFrame(completeStandingEvent(2100));
@@ -647,10 +649,10 @@ describe('PoseFrame contract consistency', () => {
       assert.equal(result.count, 0, 'no count yet - needs full cycle');
       assert.equal(result.phase, 'ready');
 
-      // Complete the cycle
-      const f6 = nativePoseEventToFrame(completeSquattingEvent(3000));
-      const f7 = nativePoseEventToFrame(completeSquattingEvent(3100));
-      const f8 = nativePoseEventToFrame(completeSquattingEvent(3200));
+      // Complete the cycle (apple-vision squatting)
+      const f6 = nativePoseEventToFrame(completeSquattingEvent(3000, { source: 'apple-vision' }));
+      const f7 = nativePoseEventToFrame(completeSquattingEvent(3100, { source: 'apple-vision' }));
+      const f8 = nativePoseEventToFrame(completeSquattingEvent(3200, { source: 'apple-vision' }));
       const f9 = nativePoseEventToFrame(completeStandingEvent(4000));
       const f10 = nativePoseEventToFrame(completeStandingEvent(4100));
       const f11 = nativePoseEventToFrame(completeStandingEvent(4200));
@@ -674,9 +676,10 @@ describe('PoseFrame contract consistency', () => {
         const standing1 = nativePoseEventToFrame(completeStandingEvent(1000 + offset));
         const standing2 = nativePoseEventToFrame(completeStandingEvent(1100 + offset));
         const standing3 = nativePoseEventToFrame(completeStandingEvent(1200 + offset));
-        const squatting1 = nativePoseEventToFrame(completeSquattingEvent(2000 + offset));
-        const squatting2 = nativePoseEventToFrame(completeSquattingEvent(2100 + offset));
-        const squatting3 = nativePoseEventToFrame(completeSquattingEvent(2200 + offset));
+        // Use apple-vision for squatting to match standing source
+        const squatting1 = nativePoseEventToFrame(completeSquattingEvent(2000 + offset, { source: 'apple-vision' }));
+        const squatting2 = nativePoseEventToFrame(completeSquattingEvent(2100 + offset, { source: 'apple-vision' }));
+        const squatting3 = nativePoseEventToFrame(completeSquattingEvent(2200 + offset, { source: 'apple-vision' }));
         const standing4 = nativePoseEventToFrame(completeStandingEvent(3000 + offset));
         const standing5 = nativePoseEventToFrame(completeStandingEvent(3100 + offset));
         const standing6 = nativePoseEventToFrame(completeStandingEvent(3200 + offset));
@@ -759,9 +762,10 @@ describe('PoseFrame contract consistency', () => {
 
     it('1. starting already squatting then returning to standing does not count', () => {
       const counter = createSquatCounter({ targetCount: 5 });
-      const f1 = nativePoseEventToFrame(completeSquattingEvent(1000));
-      const f2 = nativePoseEventToFrame(completeSquattingEvent(1100));
-      const f3 = nativePoseEventToFrame(completeSquattingEvent(1200));
+      // Use apple-vision for squatting to match standing source
+      const f1 = nativePoseEventToFrame(completeSquattingEvent(1000, { source: 'apple-vision' }));
+      const f2 = nativePoseEventToFrame(completeSquattingEvent(1100, { source: 'apple-vision' }));
+      const f3 = nativePoseEventToFrame(completeSquattingEvent(1200, { source: 'apple-vision' }));
       const f4 = nativePoseEventToFrame(completeStandingEvent(2000));
       const f5 = nativePoseEventToFrame(completeStandingEvent(2100));
       const f6 = nativePoseEventToFrame(completeStandingEvent(2200));
@@ -815,7 +819,7 @@ describe('PoseFrame contract consistency', () => {
         imageWidth: 640,
         imageHeight: 480,
         cameraFacing: 'front',
-        source: 'apple-vision',
+        source: 'mlkit', // Use ML Kit to preserve strict behavior
         coordinateSpace: 'upright-top-left-unmirrored',
         landmarks: [
           { name: 'leftShoulder', x: 280, y: 160, confidence: 0.95 },
@@ -859,7 +863,7 @@ describe('PoseFrame contract consistency', () => {
         imageWidth: 640,
         imageHeight: 480,
         cameraFacing: 'front',
-        source: 'apple-vision',
+        source: 'mlkit', // Use ML Kit to preserve strict behavior
         coordinateSpace: 'upright-top-left-unmirrored',
         landmarks: [
           // Hips unchanged from standing baseline (220).
@@ -1004,7 +1008,8 @@ describe('PoseFrame contract consistency', () => {
       const counter = createSquatCounter({ targetCount: 5 });
       const frames: Array<ReturnType<typeof nativePoseEventToFrame>> = [];
       [1000, 1100, 1200].forEach((t) => frames.push(nativePoseEventToFrame(completeStandingEvent(t))));
-      [2000, 2100, 2200].forEach((t) => frames.push(nativePoseEventToFrame(completeSquattingEvent(t))));
+      // Use apple-vision for squatting to match standing source
+      [2000, 2100, 2200].forEach((t) => frames.push(nativePoseEventToFrame(completeSquattingEvent(t, { source: 'apple-vision' }))));
       [3000, 3100, 3200].forEach((t) => frames.push(nativePoseEventToFrame(completeStandingEvent(t))));
       assertAllFramesOk(frames);
       let last: ReturnType<typeof counter.handleFrame> | undefined;
@@ -1024,8 +1029,9 @@ describe('PoseFrame contract consistency', () => {
         [1000 + offset, 1100 + offset, 1200 + offset].forEach((t) =>
           frames.push(nativePoseEventToFrame(completeStandingEvent(t))),
         );
+        // Use apple-vision for squatting to match standing source
         [2000 + offset, 2100 + offset, 2200 + offset].forEach((t) =>
-          frames.push(nativePoseEventToFrame(completeSquattingEvent(t))),
+          frames.push(nativePoseEventToFrame(completeSquattingEvent(t, { source: 'apple-vision' }))),
         );
         [3000 + offset, 3100 + offset, 3200 + offset].forEach((t) =>
           frames.push(nativePoseEventToFrame(completeStandingEvent(t))),
