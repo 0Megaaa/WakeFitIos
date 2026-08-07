@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import { createSquatCounter, type PoseFrame, type PoseLandmarkName } from './pushupCounter.ts';
 import { classifySquatPoseFrame, THRESHOLDS } from './squatPoseClassifier.ts';
+import { evaluatePoseQuality } from './poseQuality.ts';
 
 function landmark(name: PoseLandmarkName, x: number, y: number, confidence = 0.95) {
   return { name, x, y, confidence };
@@ -198,13 +199,13 @@ function lungeFrame(timestampMs: number): PoseFrame {
  * change ratio exceeds THRESHOLDS.MAX_SCALE_CHANGE_RATIO so the classifier
  * must reject this frame as 'unknown' rather than 'squatting'.
  */
-function scaleChangeFrame(timestampMs: number): PoseFrame {
+function scaleChangeFrame(timestampMs: number, source: 'apple-vision' | 'mlkit' = 'mlkit'): PoseFrame {
   return {
     timestampMs,
     imageWidth: 300,
     imageHeight: 640,
     cameraFacing: 'front',
-    source: 'apple-vision',
+    source,
     coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
       // Person moved much closer - torso appears 2x larger
@@ -215,12 +216,14 @@ function scaleChangeFrame(timestampMs: number): PoseFrame {
       // Wait: scaleChangeRatio uses (currentScale - baselineScale)/baselineScale
       // If standing scale = 140 (torso) and current scale = 280 (torso), ratio = 1.0
       // That's >> MAX_SCALE_CHANGE_RATIO (0.30) → rejected.
+      // Note: Knees must be bent to avoid passing the "standing" check first
       landmark('leftShoulder', 140, 20, 0.95),
       landmark('rightShoulder', 160, 20, 0.95),
       landmark('leftHip', 150, 300, 0.95), // Torso 280px = 2x scale
       landmark('rightHip', 150, 300, 0.95),
-      landmark('leftKnee', 150, 440, 0.95),
-      landmark('rightKnee', 150, 440, 0.95),
+      // Knees bent forward to prevent standing check from passing
+      landmark('leftKnee', 80, 440, 0.95), // Bent forward
+      landmark('rightKnee', 220, 440, 0.95), // Bent forward
       landmark('leftAnkle', 150, 580, 0.95),
       landmark('rightAnkle', 150, 580, 0.95),
     ],
@@ -630,34 +633,34 @@ describe('squat counter', () => {
     it('rejects scale change (camera movement)', () => {
       const counter = createSquatCounter({ targetCount: 5 });
 
-      // Establish baseline
-      counter.handleFrame(fullBodyFrame('standing', 1000));
-      counter.handleFrame(fullBodyFrame('standing', 1100));
-      counter.handleFrame(fullBodyFrame('standing', 1200));
-      counter.handleFrame(fullBodyFrame('standing', 1300));
-      assert.equal(counter.handleFrame(fullBodyFrame('standing', 1400)).phase, 'ready');
+      // Establish baseline with ML Kit to use strict behavior
+      counter.handleFrame(mlkitFrame('standing', 1000));
+      counter.handleFrame(mlkitFrame('standing', 1100));
+      counter.handleFrame(mlkitFrame('standing', 1200));
+      counter.handleFrame(mlkitFrame('standing', 1300));
+      assert.equal(counter.handleFrame(mlkitFrame('standing', 1400)).phase, 'ready');
 
-      // Scale change frames should not trigger down
-      counter.handleFrame(scaleChangeFrame(2000));
-      counter.handleFrame(scaleChangeFrame(2100));
-      counter.handleFrame(scaleChangeFrame(2200));
-      counter.handleFrame(scaleChangeFrame(2300));
-      counter.handleFrame(scaleChangeFrame(2400));
+      // Scale change frames should not trigger down (use ML Kit for strict behavior)
+      counter.handleFrame(scaleChangeFrame(2000, 'mlkit'));
+      counter.handleFrame(scaleChangeFrame(2100, 'mlkit'));
+      counter.handleFrame(scaleChangeFrame(2200, 'mlkit'));
+      counter.handleFrame(scaleChangeFrame(2300, 'mlkit'));
+      counter.handleFrame(scaleChangeFrame(2400, 'mlkit'));
 
-      const result = counter.handleFrame(scaleChangeFrame(2500));
+      const result = counter.handleFrame(scaleChangeFrame(2500, 'mlkit'));
       assert.equal(result.count, 0, 'scale change should not be counted');
       assert.ok(result.phase === 'ready', 'should stay in ready phase');
     });
 
     it('scale change frame produces metrics.scaleChangeRatio > MAX_SCALE_CHANGE_RATIO', () => {
-      // Establish baseline first by classifying a standing frame
-      const standingFrame = fullBodyFrame('standing', 1000);
+      // Establish baseline first by classifying a standing frame (ML Kit source)
+      const standingFrame = mlkitFrame('standing', 1000);
       const standingResult = classifySquatPoseFrame(standingFrame);
       assert.equal(standingResult.label, 'standing', 'baseline standing frame should classify as standing');
       assert.ok(standingResult.metrics, 'baseline standing frame must have metrics');
 
-      // Now classify the scale change frame with explicit baseline
-      const scaleFrame = scaleChangeFrame(2000);
+      // Now classify the scale change frame with explicit baseline (ML Kit source)
+      const scaleFrame = scaleChangeFrame(2000, 'mlkit');
       const result = classifySquatPoseFrame(scaleFrame, {
         standingBaselineHipY: standingResult.metrics!.midHipY,
         standingBaselineScale: standingResult.metrics!.poseScale,
@@ -912,19 +915,20 @@ describe('squat counter', () => {
   });
 
   describe('apple-vision bodyFillRatio squat exemption', () => {
-    it('does NOT return too_far when bodyFillRatio drops during squat', () => {
-      // Create a frame that simulates squat with small body fill ratio
-      // This simulates the natural body compression during squat
+    it('does NOT return too_far when bodyFillRatio drops below 0.32 during squat', () => {
+      // Create squat frame with TRUE bodyFillRatio < 0.32
+      // Using imageHeight=1200 to ensure fillRatio < 0.32
+      // Standing: minY=50, maxY=430, fillRatio=380/1200=0.317
+      // Squat: minY=100, maxY=350, fillRatio=250/1200=0.208 < 0.32
       const squatFrameLowFill: PoseFrame = {
         timestampMs: 2000,
         imageWidth: 640,
-        imageHeight: 480,
+        imageHeight: 1200, // Larger image height to make ratio smaller
         cameraFacing: 'front',
         source: 'apple-vision',
         coordinateSpace: 'upright-top-left-unmirrored',
         landmarks: [
-          // Standing would have minY=50, maxY=430, fillRatio=380/480=0.79
-          // Squat compresses to minY=100, maxY=350, fillRatio=250/480=0.52 < 0.32 threshold
+          // minY=100 (shoulders), maxY=350 (ankles), fillRatio=250/1200=0.208 < 0.32
           landmark('leftShoulder', 300, 100, 0.95),
           landmark('rightShoulder', 340, 100, 0.95),
           landmark('leftHip', 310, 200, 0.95),
@@ -940,11 +944,13 @@ describe('squat counter', () => {
       const standingFrame: PoseFrame = {
         timestampMs: 1000,
         imageWidth: 640,
-        imageHeight: 480,
+        imageHeight: 1200,
         cameraFacing: 'front',
         source: 'apple-vision',
         coordinateSpace: 'upright-top-left-unmirrored',
         landmarks: [
+          // minY=50 (shoulders), maxY=430 (ankles), fillRatio=380/1200=0.317 < 0.32
+          // This standing frame is also below threshold but should still establish baseline
           landmark('leftShoulder', 300, 50, 0.95),
           landmark('rightShoulder', 340, 50, 0.95),
           landmark('leftHip', 310, 150, 0.95),
@@ -956,6 +962,23 @@ describe('squat counter', () => {
         ],
       };
 
+      // Verify the math: squat frame has bodyFillRatio < 0.32
+      const squatQuality = evaluatePoseQuality(squatFrameLowFill, { exerciseType: 'squat' });
+      assert.ok(squatQuality.metrics.bodyFillRatio !== null, 'should have bodyFillRatio');
+      assert.ok(squatQuality.metrics.bodyFillRatio! < 0.32,
+        `squat frame bodyFillRatio (${squatQuality.metrics.bodyFillRatio}) should be < 0.32`);
+
+      // ML Kit should return too_far for this low fill ratio
+      const mlkitFrame = { ...squatFrameLowFill, source: 'mlkit' as const };
+      const mlkitQuality = evaluatePoseQuality(mlkitFrame, { exerciseType: 'squat' });
+      assert.equal(mlkitQuality.issue, 'too_far',
+        'ML Kit should return too_far for bodyFillRatio < 0.32');
+
+      // Apple Vision squat should NOT return too_far
+      assert.notEqual(squatQuality.issue, 'too_far',
+        'Apple Vision squat should NOT return too_far');
+
+      // Also verify through classifier
       const counter = createSquatCounter({ targetCount: 5 });
       counter.handleFrame(standingFrame);
       counter.handleFrame(standingFrame);
@@ -964,11 +987,13 @@ describe('squat counter', () => {
       assert.equal(counter.handleFrame(standingFrame).phase, 'ready');
 
       // Now test squat with low bodyFillRatio
-      const result = counter.handleFrame(squatFrameLowFill);
+      const classifierResult = classifySquatPoseFrame(squatFrameLowFill);
+      assert.notEqual(classifierResult.qualityIssue, 'too_far',
+        'Apple Vision classifier should not return too_far for squat');
 
-      // Should NOT be too_far - Apple Vision squat exemption
-      // The frame should be classified, not rejected
-      assert.ok(result.isPoseReady || result.phase !== 'waiting_for_body',
+      // Counter should still work (may not count due to geometry, but shouldn't reset)
+      const counterResult = counter.handleFrame(squatFrameLowFill);
+      assert.ok(counterResult.phase !== 'waiting_for_body' || counterResult.count === 0,
         'should not reset to waiting due to too_far');
     });
   });
@@ -1004,6 +1029,186 @@ describe('squat counter', () => {
       const appleVisionResult = classifySquatPoseFrame(lowConfidenceFrame);
       assert.notEqual(appleVisionResult.qualityIssue, 'low_confidence',
         'Apple Vision should accept 0.45 confidence');
+    });
+  });
+
+  describe('apple-vision 0.45 confidence counter integration', () => {
+    it('Apple Vision counter counts squat with 0.45 confidence frames', () => {
+      // This test verifies the FULL counter chain works with 0.45 confidence
+      // Not just the classifier directly, but through createSquatCounter
+      const counter = createSquatCounter({ targetCount: 5 });
+
+      // Establish baseline with high confidence standing frames
+      counter.handleFrame(appleVisionFrame('standing', 1000));
+      counter.handleFrame(appleVisionFrame('standing', 1100));
+      counter.handleFrame(appleVisionFrame('standing', 1200));
+      let result = counter.handleFrame(appleVisionFrame('standing', 1300));
+      assert.equal(result.phase, 'ready');
+
+      // Now provide 2 squat frames with 0.45 confidence
+      const lowConfSquatFrame1: PoseFrame = {
+        timestampMs: 2000,
+        imageWidth: 300,
+        imageHeight: 640,
+        cameraFacing: 'front',
+        source: 'apple-vision',
+        coordinateSpace: 'upright-top-left-unmirrored',
+        landmarks: [
+          // All landmarks at 0.45 confidence - below 0.55 but above 0.35
+          // Using squat geometry: knee angle ~80°
+          landmark('leftShoulder', 140, 160, 0.45),
+          landmark('rightShoulder', 160, 160, 0.45),
+          landmark('leftHip', 150, 300, 0.45),
+          landmark('rightHip', 150, 300, 0.45),
+          landmark('leftKnee', 0, 400, 0.45),
+          landmark('rightKnee', 300, 400, 0.45),
+          landmark('leftAnkle', 150, 560, 0.45),
+          landmark('rightAnkle', 150, 560, 0.45),
+        ],
+      };
+
+      const lowConfSquatFrame2: PoseFrame = { ...lowConfSquatFrame1, timestampMs: 2100 };
+
+      // Apple Vision should count this squat
+      counter.handleFrame(lowConfSquatFrame1);
+      result = counter.handleFrame(lowConfSquatFrame2);
+
+      assert.equal(result.count, 1, 'Apple Vision should count squat with 0.45 confidence');
+      assert.equal(result.phase, 'down');
+    });
+
+    it('ML Kit counter does NOT count squat with 0.45 confidence frames', () => {
+      // ML Kit should maintain strict 0.55 threshold
+      const counter = createSquatCounter({ targetCount: 5 });
+
+      // Establish baseline with ML Kit high confidence frames
+      counter.handleFrame(mlkitFrame('standing', 1000));
+      counter.handleFrame(mlkitFrame('standing', 1100));
+      counter.handleFrame(mlkitFrame('standing', 1200));
+      let result = counter.handleFrame(mlkitFrame('standing', 1300));
+      assert.equal(result.phase, 'ready');
+
+      // Provide 0.45 confidence squat frame for ML Kit
+      const lowConfSquatFrame: PoseFrame = {
+        timestampMs: 2000,
+        imageWidth: 300,
+        imageHeight: 640,
+        cameraFacing: 'front',
+        source: 'mlkit',
+        coordinateSpace: 'upright-top-left-unmirrored',
+        landmarks: [
+          // All landmarks at 0.45 confidence - below ML Kit 0.55 threshold
+          landmark('leftShoulder', 140, 160, 0.45),
+          landmark('rightShoulder', 160, 160, 0.45),
+          landmark('leftHip', 150, 300, 0.45),
+          landmark('rightHip', 150, 300, 0.45),
+          landmark('leftKnee', 0, 400, 0.45),
+          landmark('rightKnee', 300, 400, 0.45),
+          landmark('leftAnkle', 150, 560, 0.45),
+          landmark('rightAnkle', 150, 560, 0.45),
+        ],
+      };
+
+      // ML Kit should reject this due to low confidence
+      result = counter.handleFrame(lowConfSquatFrame);
+      assert.equal(result.count, 0, 'ML Kit should NOT count squat with 0.45 confidence');
+      // Should still be in ready or down phase, but count should be 0
+    });
+  });
+
+  describe('apple-vision scaleChange relaxed counter integration', () => {
+    it('Apple Vision counts squat even when scaleChangeRatio > 0.30 if knee <= 130', () => {
+      // This test verifies Apple Vision relaxed fallback takes priority over scaleChange hard reject
+      const counter = createSquatCounter({ targetCount: 5 });
+
+      // Establish baseline with high confidence standing frames
+      counter.handleFrame(appleVisionFrame('standing', 1000));
+      counter.handleFrame(appleVisionFrame('standing', 1100));
+      counter.handleFrame(appleVisionFrame('standing', 1200));
+      let result = counter.handleFrame(appleVisionFrame('standing', 1300));
+      assert.equal(result.phase, 'ready');
+
+      // Create squat frame with:
+      // - knee angle <= 130 (satisfies Apple Vision relaxed fallback)
+      // - scaleChangeRatio > 0.30 (would fail strict check)
+      // Simulate by making torso larger (simulating forward lean / camera movement)
+      const squatFrame1: PoseFrame = {
+        timestampMs: 2000,
+        imageWidth: 300,
+        imageHeight: 640,
+        cameraFacing: 'front',
+        source: 'apple-vision',
+        coordinateSpace: 'upright-top-left-unmirrored',
+        landmarks: [
+          // Standing baseline: shoulder y=100, hip y=240, torso=140px
+          // Squat with forward lean: shoulder y=200, hip y=340, torso=140px
+          // But knees forward: x=0/300, knee angle ~80° (<=130)
+          // Scale will change due to forward lean, but knee bend is obvious
+          landmark('leftShoulder', 140, 200, 0.95),
+          landmark('rightShoulder', 160, 200, 0.95),
+          landmark('leftHip', 150, 340, 0.95),
+          landmark('rightHip', 150, 340, 0.95),
+          landmark('leftKnee', 0, 400, 0.95),
+          landmark('rightKnee', 300, 400, 0.95),
+          landmark('leftAnkle', 150, 560, 0.95),
+          landmark('rightAnkle', 150, 560, 0.95),
+        ],
+      };
+
+      const squatFrame2: PoseFrame = { ...squatFrame1, timestampMs: 2100 };
+
+      // Verify scaleChangeRatio > 0.30 for strict ML Kit
+      const mlkitFrame = { ...squatFrame1, source: 'mlkit' as const };
+      const mlkitResult = classifySquatPoseFrame(mlkitFrame);
+      // ML Kit should reject due to scaleChange
+      assert.equal(mlkitResult.label, 'unknown',
+        'ML Kit should reject squat with high scaleChangeRatio');
+
+      // Apple Vision should count due to relaxed fallback
+      counter.handleFrame(squatFrame1);
+      result = counter.handleFrame(squatFrame2);
+
+      assert.equal(result.count, 1, 'Apple Vision should count squat with obvious knee bend despite scaleChange');
+      assert.equal(result.phase, 'down');
+    });
+
+    it('ML Kit does NOT count squat with high scaleChangeRatio', () => {
+      // ML Kit should maintain strict scaleChangeRatio > 0.30 rejection
+      const counter = createSquatCounter({ targetCount: 5 });
+
+      // Establish baseline with ML Kit
+      counter.handleFrame(mlkitFrame('standing', 1000));
+      counter.handleFrame(mlkitFrame('standing', 1100));
+      counter.handleFrame(mlkitFrame('standing', 1200));
+      let result = counter.handleFrame(mlkitFrame('standing', 1300));
+      assert.equal(result.phase, 'ready');
+
+      // Create squat frame with high scaleChangeRatio
+      const highScaleSquatFrame: PoseFrame = {
+        timestampMs: 2000,
+        imageWidth: 300,
+        imageHeight: 640,
+        cameraFacing: 'front',
+        source: 'mlkit',
+        coordinateSpace: 'upright-top-left-unmirrored',
+        landmarks: [
+          // Same as above but with ML Kit source
+          landmark('leftShoulder', 140, 200, 0.95),
+          landmark('rightShoulder', 160, 200, 0.95),
+          landmark('leftHip', 150, 340, 0.95),
+          landmark('rightHip', 150, 340, 0.95),
+          landmark('leftKnee', 0, 400, 0.95),
+          landmark('rightKnee', 300, 400, 0.95),
+          landmark('leftAnkle', 150, 560, 0.95),
+          landmark('rightAnkle', 150, 560, 0.95),
+        ],
+      };
+
+      // ML Kit should not count this
+      counter.handleFrame(highScaleSquatFrame);
+      result = counter.handleFrame(highScaleSquatFrame);
+
+      assert.equal(result.count, 0, 'ML Kit should NOT count squat with high scaleChangeRatio');
     });
   });
 

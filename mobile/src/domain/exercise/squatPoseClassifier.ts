@@ -173,17 +173,12 @@ function classifyByGeometry(
   const hasBaseline = options.standingBaselineHipY !== undefined && options.standingBaselineScale !== undefined;
   const isAV = isAppleVision(frame);
 
-  // Reject if scale change is too large (likely camera movement, not squat)
-  if (scaleChangeRatio > THRESHOLDS.MAX_SCALE_CHANGE_RATIO) {
-    return 'unknown';
-  }
-
   // Confident standing: knees nearly straight AND hip extended
   if (avgKnee >= THRESHOLDS.KNEE_STANDING && avgHip >= THRESHOLDS.HIP_STANDING) {
     return 'standing';
   }
 
-  // Without baseline, use Apple Vision relaxed fallback
+  // Without baseline, use Apple Vision relaxed fallback (no scaleChange check)
   if (!hasBaseline) {
     if (isAV && avgKnee <= THRESHOLDS.APPLE_VISION_KNEE_DOWN_RELAXED) {
       return 'squatting';
@@ -192,15 +187,23 @@ function classifyByGeometry(
   }
 
   // ===== APPLE VISION RELAXED FALLBACK =====
-  // Apple Vision can use simpler squat detection with relaxed thresholds
+  // For Apple Vision, relaxed fallback takes priority over scaleChange hard reject.
+  // This allows squats even when body lean causes scale change.
   if (isAV) {
     const appleVisionResult = classifyAppleVisionRelaxed(metrics, kneeDiff);
     if (appleVisionResult !== null) {
       return appleVisionResult;
     }
+    // Apple Vision relaxed fallback didn't match, continue to strict checks
+    // (scaleChange will still be checked for non-relaxed cases)
   }
 
   // ===== STRICT CLASSIFICATION (ML Kit and non-relaxed Apple Vision) =====
+  // Reject if scale change is too large (likely camera movement, not squat)
+  if (scaleChangeRatio > THRESHOLDS.MAX_SCALE_CHANGE_RATIO) {
+    return 'unknown';
+  }
+
   // Squatting classification requires baseline for hipDropRatio
   // hipDropRatio > 0 means hip moved DOWN relative to standing baseline
 

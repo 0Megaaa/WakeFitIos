@@ -102,7 +102,8 @@ export function evaluatePoseQuality(
   const exerciseType = options.exerciseType ?? 'squat';
   // Apple Vision requires lower confidence threshold for squat
   const isAppleVisionSquat = frame.source === 'apple-vision' && exerciseType === 'squat';
-  const minConfidence = isAppleVisionSquat ? 0.35 : (options.minConfidence ?? 0.55);
+  // Explicit configuration takes priority; otherwise use platform-specific defaults
+  const minConfidence = options.minConfidence ?? (isAppleVisionSquat ? 0.35 : 0.55);
   const requiredLandmarks = getRequiredLandmarks(exerciseType);
 
   const byName = new Map<string, { x: number; y: number; confidence: number }>();

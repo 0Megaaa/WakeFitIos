@@ -892,8 +892,9 @@ describe('PoseFrame contract consistency', () => {
 
     it('5. hip drops but hip angle still wide → not squatting', () => {
       const counter = createSquatCounter({ targetCount: 5 });
+      // Use ML Kit source for strict behavior
       const baselineFrames = [1000, 1100, 1200].map((t) =>
-        nativePoseEventToFrame(completeStandingEvent(t)),
+        nativePoseEventToFrame(completeStandingEvent(t, { source: 'mlkit' })),
       );
       assertAllFramesOk(baselineFrames);
       baselineFrames.forEach((f) => counter.handleFrame(f!));
@@ -905,7 +906,7 @@ describe('PoseFrame contract consistency', () => {
         imageWidth: 640,
         imageHeight: 480,
         cameraFacing: 'front',
-        source: 'apple-vision',
+        source: 'mlkit', // Use ML Kit for strict behavior
         coordinateSpace: 'upright-top-left-unmirrored',
         landmarks: [
           { name: 'leftShoulder', x: 150, y: 120, confidence: 0.95 },
@@ -932,8 +933,9 @@ describe('PoseFrame contract consistency', () => {
 
     it('6. person approaches camera (scale change > MAX_SCALE_CHANGE_RATIO) does not count', () => {
       const counter = createSquatCounter({ targetCount: 5 });
+      // Use ML Kit source for strict behavior
       const baselineFrames = [1000, 1100, 1200].map((t) =>
-        nativePoseEventToFrame(completeStandingEvent(t)),
+        nativePoseEventToFrame(completeStandingEvent(t, { source: 'mlkit' })),
       );
       assertAllFramesOk(baselineFrames);
       baselineFrames.forEach((f) => counter.handleFrame(f!));
@@ -946,7 +948,7 @@ describe('PoseFrame contract consistency', () => {
         imageWidth: 640,
         imageHeight: 480,
         cameraFacing: 'front',
-        source: 'apple-vision',
+        source: 'mlkit', // Use ML Kit for strict behavior
         coordinateSpace: 'upright-top-left-unmirrored',
         landmarks: [
           { name: 'leftShoulder', x: 230, y: 32, confidence: 0.95 },

@@ -154,7 +154,13 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
  */
 export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCounter {
   const targetCount = normalizeTargetCount(options.targetCount);
-  const minConfidence = options.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
+
+  // Store explicit config for stable frames
+  const configuredMinConfidence = options.minConfidence;
+  const configuredStableFrames = Math.max(
+    1,
+    Math.trunc(options.minStableFrames ?? DEFAULT_MIN_STABLE_FRAMES),
+  );
 
   type Phase = 'waiting_for_body' | 'standing_ready' | 'down_confirmed';
 
@@ -178,8 +184,15 @@ export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCou
     return frame.source === 'apple-vision';
   }
 
+  /**
+   * Get minimum stable frames for squat detection.
+   * Uses source-specific defaults but respects explicit configuration.
+   */
   function getMinStableFrames(frame: PoseFrame): number {
-    return isAppleVision(frame) ? APPLE_VISION_SQUAT_MIN_STABLE_FRAMES : SQUAT_MIN_STABLE_FRAMES;
+    if (isAppleVision(frame)) {
+      return Math.max(APPLE_VISION_SQUAT_MIN_STABLE_FRAMES, configuredStableFrames);
+    }
+    return Math.max(SQUAT_MIN_STABLE_FRAMES, configuredStableFrames);
   }
 
   function getInvalidThreshold(frame: PoseFrame): number {
@@ -226,17 +239,25 @@ export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCou
 
   /**
    * Classify frame using the squat classifier.
-   * Returns classification with all details.
+   * Only passes explicit minConfidence if configured; otherwise classifier uses source-specific default.
    */
   function classifyFrame(frame: PoseFrame): SquatPoseClassification {
     const baselineHipY = getBaselineHipY();
     const baselineScale = getBaselineScale();
 
-    return classifySquatPoseFrame(frame, {
-      minConfidence,
+    // Only pass minConfidence if explicitly configured
+    // Otherwise, classifier will use source-specific default (0.35 for Apple Vision, 0.55 for ML Kit)
+    const classifierOptions: { minConfidence?: number; standingBaselineHipY?: number; standingBaselineScale?: number } = {
       standingBaselineHipY: baselineHipY ?? undefined,
       standingBaselineScale: baselineScale ?? undefined,
-    });
+    };
+
+    // Only override default if user explicitly configured minConfidence
+    if (configuredMinConfidence !== undefined) {
+      classifierOptions.minConfidence = configuredMinConfidence;
+    }
+
+    return classifySquatPoseFrame(frame, classifierOptions);
   }
 
   return {
