@@ -20,7 +20,17 @@ function frame(
   side: BodySide = 'left',
   timestampMs = 1000,
 ): PoseFrame {
-  const wrist = angle === 'up' ? { x: 1, y: 0 } : { x: -0.2, y: -1 };
+  // For proper elbow angle detection with thresholds upAngle=160, downAngle=90:
+  // - up position: arm extended, elbow angle = 180° (collinear, elbow in middle)
+  // - down position: arm bent, elbow angle < 90° (vectors in same general direction)
+  //
+  // Geometry (upright coords, y increases downward):
+  // shoulder(100, 50), elbow(100, 200)
+  // - up: wrist(100, 350) → AB=(0,-150), BC=(0,150) → angle = 180°
+  // - down: wrist(150, 100) → AB=(0,-150), BC=(50,-100) → angle = 26.6° (< 90)
+  const wrist = angle === 'up'
+    ? { x: 100, y: 350 }  // Extended - 180°
+    : { x: 150, y: 100 }; // Bent - 26.6°
   const prefix = side === 'left' ? 'left' : 'right';
 
   return {
@@ -31,10 +41,10 @@ function frame(
     source: 'apple-vision',
     coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
-      landmark(`${prefix}Shoulder` as PoseLandmarkName, -1, 0, confidence),
-      landmark(`${prefix}Elbow` as PoseLandmarkName, 0, 0, confidence),
+      landmark(`${prefix}Shoulder` as PoseLandmarkName, 100, 50, confidence),
+      landmark(`${prefix}Elbow` as PoseLandmarkName, 100, 200, confidence),
       landmark(`${prefix}Wrist` as PoseLandmarkName, wrist.x, wrist.y, confidence),
-      landmark(`${prefix}Hip` as PoseLandmarkName, -1.1, 1, confidence),
+      landmark(`${prefix}Hip` as PoseLandmarkName, 100, 250, confidence),
     ],
   };
 }
@@ -46,17 +56,19 @@ function stableRep(counter: ReturnType<typeof createPushUpCounter>, side: BodySi
   counter.handleFrame(frame('down', 0.95, side, 2100));
   counter.handleFrame(frame('up', 0.95, side, 3000));
   return counter.handleFrame(frame('up', 0.95, side, 3100));
-}
-
-describe('push-up counter core', () => {
+}describe('push-up counter core', () => {
   it('calculates the elbow angle from shoulder, elbow, and wrist points', () => {
+    // Test the angle calculation with valid coordinates
+    // shoulder(100, 50), elbow(100, 200), wrist(100, 350)
+    // Vectors from elbow: shoulder(0, -150), wrist(0, 150) - collinear
     const angle = calculateAngle(
-      { x: -1, y: 0 },
-      { x: 0, y: 0 },
-      { x: 0, y: -1 },
+      { x: 100, y: 50 },  // shoulder
+      { x: 100, y: 200 }, // elbow
+      { x: 100, y: 350 }, // wrist
     );
 
-    assert.equal(Math.round(angle), 90);
+    // For straight arm (collinear), angle should be 180
+    assert.equal(Math.round(angle), 180);
   });
 
   it('waits for a complete confident body pose before counting', () => {

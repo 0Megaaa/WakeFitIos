@@ -108,7 +108,8 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
       guard let self else { return }
 
       do {
-        let session = try self.configureSession(facing: requestedFacing, generation: generation)
+        let (session, output) = try self.configureSession(facing: requestedFacing, generation: generation)
+
         // Re-verify state before assigning
         guard self.cameraGeneration == generation,
               self.isAttached,
@@ -118,7 +119,7 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
         }
 
         self.captureSession = session
-        self.videoOutput = session.outputs.first as? AVCaptureVideoDataOutput
+        self.videoOutput = output
 
         if !session.isRunning {
           session.startRunning()
@@ -149,8 +150,10 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
     let generation = cameraGeneration + 1
     cameraGeneration = generation
 
+    // Clear sample buffer delegate first
+    videoOutput?.setSampleBufferDelegate(nil, queue: nil)
+
     let session = captureSession
-    let output = videoOutput
     captureSession = nil
     videoOutput = nil
     isProcessingFrame = false
@@ -172,7 +175,9 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
     NSLog("WakeFitCamera stopped generation=%d", generation)
   }
 
-  private func configureSession(facing: String, generation: Int) throws -> AVCaptureSession {
+  /// Configure and return the session and output together.
+  /// The caller is responsible for managing the session lifecycle.
+  private func configureSession(facing: String, generation: Int) throws -> (AVCaptureSession, AVCaptureVideoDataOutput) {
     let session = AVCaptureSession()
 
     session.beginConfiguration()
@@ -211,7 +216,7 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
       configureVideoOutputConnection(connection)
     }
 
-    return session
+    return (session, output)
   }
 
   private func installPreviewLayer() {

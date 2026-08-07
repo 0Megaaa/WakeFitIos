@@ -49,33 +49,37 @@ class WakeFitPoseOverlayView(context: Context) : View(context) {
   // Canonical upright coordinates
   private var points: Map<String, WakeFitPosePoint> = emptyMap()
   // Transformation matrix from canonical coordinates to view coordinates
-  private var transformMatrix: Matrix = Matrix()
+  // null means transform is not yet available - skip drawing but keep pose data
+  private var transformMatrix: Matrix? = null
 
   fun updatePose(
     nextPoints: List<WakeFitPosePoint>,
-    matrix: Matrix,
+    matrix: Matrix?,
   ) {
     // Filter by confidence threshold
     points = nextPoints
       .filter { it.confidence >= CONFIDENCE_THRESHOLD }
       .associateBy { it.name }
 
-    // Use the CameraX transformation matrix directly
-    transformMatrix = matrix
+    // Store the matrix - make a copy to avoid external modification
+    transformMatrix = matrix?.let { Matrix(it) }
 
     invalidate()
   }
 
   fun clearPose() {
     points = emptyMap()
+    transformMatrix = null
     invalidate()
   }
 
   override fun onDraw(canvas: Canvas) {
     super.onDraw(canvas)
-    if (width <= 0 || height <= 0 || points.isEmpty() || transformMatrix.isIdentity) {
+    if (width <= 0 || height <= 0 || points.isEmpty() || transformMatrix == null) {
       return
     }
+
+    val matrix = transformMatrix!!
 
     for ((startName, endName) in SKELETON_LINES) {
       val startPoint = points[startName]
@@ -83,13 +87,13 @@ class WakeFitPoseOverlayView(context: Context) : View(context) {
       if (startPoint == null || endPoint == null) {
         continue
       }
-      val start = toViewPoint(startPoint)
-      val end = toViewPoint(endPoint)
+      val start = toViewPoint(startPoint, matrix)
+      val end = toViewPoint(endPoint, matrix)
       canvas.drawLine(start.x, start.y, end.x, end.y, linePaint)
     }
 
     for (point in points.values) {
-      val viewPoint = toViewPoint(point)
+      val viewPoint = toViewPoint(point, matrix)
       canvas.drawCircle(viewPoint.x, viewPoint.y, 9f, pointStrokePaint)
       canvas.drawCircle(viewPoint.x, viewPoint.y, 7f, pointPaint)
     }
@@ -105,9 +109,9 @@ class WakeFitPoseOverlayView(context: Context) : View(context) {
    *
    * Using mapPoints: floatArrayOf(x, y) -> {x', y'}
    */
-  private fun toViewPoint(point: WakeFitPosePoint): PointF {
+  private fun toViewPoint(point: WakeFitPosePoint, matrix: Matrix): PointF {
     val floatCoords = floatArrayOf(point.x, point.y)
-    transformMatrix.mapPoints(floatCoords)
+    matrix.mapPoints(floatCoords)
     return PointF(floatCoords[0], floatCoords[1])
   }
 

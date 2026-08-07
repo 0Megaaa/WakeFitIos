@@ -18,7 +18,16 @@ function pushUpFrame(
   timestampMs: number,
   confidence = 0.95,
 ): PoseFrame {
-  const wrist = angle === 'up' ? { x: 1, y: 0 } : { x: -0.2, y: -1 };
+  // For proper elbow angle detection with thresholds upAngle=160, downAngle=90:
+  // - up position: arm extended, elbow angle >= 160
+  // - down position: arm bent, elbow angle < 90
+  //
+  // shoulder(50, 50), elbow(50, 200)
+  // - up: wrist(50, 350) → AB=(0,-150), BC=(0,150) → angle = 180° (>= 160)
+  // - down: wrist(100, 100) → AB=(0,-150), BC=(-50,-100) → angle = 26.6° (< 90)
+  const wrist = angle === 'up'
+    ? { x: 50, y: 350 }   // Extended - 180°
+    : { x: 100, y: 100 };  // Bent - 26.6°
 
   return {
     timestampMs,
@@ -28,10 +37,10 @@ function pushUpFrame(
     source: 'apple-vision',
     coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
-      landmark('leftShoulder', -1, 0, confidence),
-      landmark('leftElbow', 0, 0, confidence),
+      landmark('leftShoulder', 50, 50, confidence),
+      landmark('leftElbow', 50, 200, confidence),
       landmark('leftWrist', wrist.x, wrist.y, confidence),
-      landmark('leftHip', -1.1, 1, confidence),
+      landmark('leftHip', 50, 250, confidence),
     ],
   };
 }

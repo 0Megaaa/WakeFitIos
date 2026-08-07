@@ -72,10 +72,6 @@ function completeStandingEvent(timestampMs: number, overrides: Partial<NativePos
 }
 
 /**
- * Helper to create a complete squat pose frame for counter testing.
- * Uses knee angles that definitely trigger squatting classification.
- */
-/**
  * Squatting event with proper geometry.
  * Standing torso = 140px, so squat torso should also be ~140px.
  * For 640x480, use ~280px torso (2x scale).
@@ -158,8 +154,8 @@ describe('PoseFrame contract consistency', () => {
       });
     });
 
-    describe('landmark validation', () => {
-      it('discards individual invalid points but returns frame with remaining valid points', () => {
+    describe('landmark validation - single invalid point filtering', () => {
+      it('filters out x > imageWidth points but returns frame with remaining valid points', () => {
         // One invalid point + 7 valid points = frame should be non-null with 7 landmarks
         const event = completeSquatEvent({
           landmarks: [
@@ -180,7 +176,7 @@ describe('PoseFrame contract consistency', () => {
         assert.ok(!frame.landmarks.some((l) => l.name === 'leftShoulder'), 'leftShoulder should be filtered');
       });
 
-      it('discards y > imageHeight points but returns frame', () => {
+      it('filters out y > imageHeight points but returns frame', () => {
         const event = completeSquatEvent({
           landmarks: [
             { name: 'leftShoulder', x: 150, y: 500, confidence: 0.9 }, // y > 480 = invalid
@@ -198,7 +194,7 @@ describe('PoseFrame contract consistency', () => {
         assert.equal(frame.landmarks.length, 7, 'invalid point should be filtered');
       });
 
-      it('discards negative x points but returns frame', () => {
+      it('filters out negative x points but returns frame', () => {
         const event = completeSquatEvent({
           landmarks: [
             { name: 'leftShoulder', x: -10, y: 80, confidence: 0.9 }, // negative = invalid
@@ -212,27 +208,29 @@ describe('PoseFrame contract consistency', () => {
           ],
         });
         const frame = nativePoseEventToFrame(event);
-        assert.equal(frame, null, 'negative x should return null');
+        assert.ok(frame, 'frame should not be null - negative x point filtered');
+        assert.equal(frame.landmarks.length, 7, 'invalid point should be filtered');
       });
 
-      it('rejects landmarks with negative y', () => {
+      it('filters out negative y points but returns frame', () => {
         const event = completeSquatEvent({
           landmarks: [
-            { name: 'leftShoulder', x: 150, y: -5, confidence: 0.9 },
-            { name: 'rightShoulder', x: 490, y: 80, confidence: 0.9 },
-            { name: 'leftHip', x: 160, y: 280, confidence: 0.85 },
-            { name: 'rightHip', x: 480, y: 280, confidence: 0.85 },
-            { name: 'leftKnee', x: 165, y: 380, confidence: 0.8 },
-            { name: 'rightKnee', x: 475, y: 380, confidence: 0.8 },
-            { name: 'leftAnkle', x: 170, y: 460, confidence: 0.75 },
-            { name: 'rightAnkle', x: 470, y: 460, confidence: 0.75 },
+            { name: 'leftShoulder', x: 150, y: -5, confidence: 0.9 }, // negative = invalid
+            { name: 'rightShoulder', x: 490, y: 80, confidence: 0.9 }, // valid
+            { name: 'leftHip', x: 160, y: 280, confidence: 0.85 }, // valid
+            { name: 'rightHip', x: 480, y: 280, confidence: 0.85 }, // valid
+            { name: 'leftKnee', x: 165, y: 380, confidence: 0.8 }, // valid
+            { name: 'rightKnee', x: 475, y: 380, confidence: 0.8 }, // valid
+            { name: 'leftAnkle', x: 170, y: 460, confidence: 0.75 }, // valid
+            { name: 'rightAnkle', x: 470, y: 460, confidence: 0.75 }, // valid
           ],
         });
         const frame = nativePoseEventToFrame(event);
-        assert.equal(frame, null, 'negative y should return null');
+        assert.ok(frame, 'frame should not be null - negative y point filtered');
+        assert.equal(frame.landmarks.length, 7, 'invalid point should be filtered');
       });
 
-      it('discards confidence < 0 points but returns frame', () => {
+      it('filters out confidence < 0 points but returns frame', () => {
         const event = completeSquatEvent({
           landmarks: [
             { name: 'leftShoulder', x: 150, y: 80, confidence: -0.1 }, // invalid
@@ -246,11 +244,11 @@ describe('PoseFrame contract consistency', () => {
           ],
         });
         const frame = nativePoseEventToFrame(event);
-        assert.ok(frame, 'frame should not be null - invalid point filtered');
+        assert.ok(frame, 'frame should not be null - invalid confidence filtered');
         assert.equal(frame.landmarks.length, 7, 'invalid point should be filtered');
       });
 
-      it('discards confidence > 1 points but returns frame', () => {
+      it('filters out confidence > 1 points but returns frame', () => {
         const event = completeSquatEvent({
           landmarks: [
             { name: 'leftShoulder', x: 150, y: 80, confidence: 1.5 }, // invalid
@@ -264,7 +262,7 @@ describe('PoseFrame contract consistency', () => {
           ],
         });
         const frame = nativePoseEventToFrame(event);
-        assert.ok(frame, 'frame should not be null - invalid point filtered');
+        assert.ok(frame, 'frame should not be null - invalid confidence filtered');
         assert.equal(frame.landmarks.length, 7, 'invalid point should be filtered');
       });
 
@@ -279,7 +277,7 @@ describe('PoseFrame contract consistency', () => {
         assert.equal(frame, null, 'no valid landmarks should return null');
       });
 
-      it('discards individual invalid points but accepts valid ones', () => {
+      it('filters invalid points but accepts valid ones', () => {
         const event = completeSquatEvent({
           landmarks: [
             { name: 'leftShoulder', x: 150, y: 80, confidence: 0.9 },
@@ -416,7 +414,9 @@ describe('PoseFrame contract consistency', () => {
         ],
       });
       const frame = nativePoseEventToFrame(event);
-      assert.equal(frame, null, 'y > imageHeight should return null from adapter');
+      // Note: Adapter filters invalid points, so this returns a frame with 7 landmarks
+      // The out_of_frame issue should be detected by evaluatePoseQuality
+      assert.ok(frame, 'adapter returns frame with filtered landmarks');
     });
 
     it('works independently of cameraFacing', () => {
@@ -529,6 +529,33 @@ describe('PoseFrame contract consistency', () => {
       const result = classifySquatPoseFrame(frame);
       assert.equal(result.label, 'unknown', 'low confidence should be unknown');
       assert.equal(result.qualityIssue, 'low_confidence');
+    });
+
+    it('returns unknown for squatting without baseline', () => {
+      const frame = nativePoseEventToFrame(completeSquattingEvent(1000));
+      assert.ok(frame);
+      const result = classifySquatPoseFrame(frame);
+      // Without baseline, squatting cannot be confirmed
+      assert.equal(result.label, 'unknown', 'squatting without baseline should be unknown');
+    });
+
+    it('returns squatting when baseline is provided', () => {
+      const standingFrame = nativePoseEventToFrame(completeStandingEvent(1000));
+      const squatFrame = nativePoseEventToFrame(completeSquattingEvent(2000));
+      assert.ok(standingFrame);
+      assert.ok(squatFrame);
+
+      // First get standing baseline
+      const standingResult = classifySquatPoseFrame(standingFrame);
+      assert.equal(standingResult.label, 'standing');
+      assert.ok(standingResult.metrics);
+
+      // Then classify squat with baseline
+      const squatResult = classifySquatPoseFrame(squatFrame, {
+        standingBaselineHipY: standingResult.metrics!.midHipY,
+        standingBaselineScale: standingResult.metrics!.poseScale,
+      });
+      assert.equal(squatResult.label, 'squatting', 'squatting with baseline should be confirmed');
     });
   });
 

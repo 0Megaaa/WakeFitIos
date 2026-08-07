@@ -298,7 +298,7 @@ function getPoseScale(body: Record<string, { x: number; y: number; confidence: n
  * 2. Left/right leg symmetry (knee angle difference)
  * 3. Knee threshold margin
  * 4. Hip threshold margin
- * 5. hipDrop margin
+ * 5. hipDrop margin (deeper squats should NOT be penalized)
  * 6. scaleChange margin
  */
 function calculateConfidence(
@@ -328,21 +328,56 @@ function calculateConfidence(
     Math.abs(metrics.averageHipAngle - THRESHOLDS.HIP_DOWN) / 40,
   );
 
-  // hipDrop margin (if baseline available)
-  const hipDropMarginScore = options.standingBaselineHipY !== undefined
-    ? Math.max(0, 1 - Math.abs(metrics.hipDropRatio - THRESHOLDS.MIN_HIP_DROP_RATIO) / 0.1)
-    : 0.5;
+  // hipDrop margin score:
+  // - More hip drop = higher score (up to a maximum)
+  // - Do NOT penalize deeper squats
+  // Score ranges from 0 to 1 based on how much the hip has dropped
+  const hipDropScore: number = (() => {
+    if (options.standingBaselineHipY === undefined) {
+      return 0.5; // No baseline - neutral score
+    }
+    const hipDrop = metrics.hipDropRatio;
+    // Higher hipDropRatio = better (more depth)
+    // Cap at 0.15 (about 15% of body scale drop)
+    const normalizedScore = Math.min(1, hipDrop / 0.15);
+    return Math.max(0, Math.min(1, normalizedScore));
+  })();
 
   // Scale stability score (inverse of scale change)
   const scaleScore = Math.max(0, 1 - metrics.scaleChangeRatio / THRESHOLDS.MAX_SCALE_CHANGE_RATIO);
 
+  // Knee score: standing = straight, squatting = bent
+  // Both should be high but for different geometric reasons
+  const kneeScore: number = (() => {
+    if (metrics.averageKneeAngle >= THRESHOLDS.KNEE_STANDING - 10) {
+      // Standing pose - straighter is better
+      return Math.min(1, (metrics.averageKneeAngle - THRESHOLDS.KNEE_STANDING + 20) / 20);
+    } else if (metrics.averageKneeAngle <= THRESHOLDS.KNEE_DOWN_STRONG + 10) {
+      // Squatting pose - more bent is better
+      return Math.min(1, (THRESHOLDS.KNEE_DOWN_STRONG + 20 - metrics.averageKneeAngle) / 20);
+    }
+    return 0.5; // Middle ground
+  })();
+
+  // Hip score: standing = extended, squatting = flexed
+  const hipScore: number = (() => {
+    if (metrics.averageHipAngle >= THRESHOLDS.HIP_STANDING - 10) {
+      // Standing pose - more extended is better
+      return Math.min(1, (metrics.averageHipAngle - THRESHOLDS.HIP_STANDING + 20) / 20);
+    } else if (metrics.averageHipAngle <= THRESHOLDS.HIP_DOWN + 10) {
+      // Squatting pose - more flexed is better
+      return Math.min(1, (THRESHOLDS.HIP_DOWN + 20 - metrics.averageHipAngle) / 20);
+    }
+    return 0.5; // Middle ground
+  })();
+
   // Weighted confidence
   const confidence = (
-    minLandmarkConfidence * 0.35 +
-    symmetryScore * 0.20 +
-    Math.min(kneeBoundaryScore, 1) * 0.15 +
-    Math.min(hipBoundaryScore, 1) * 0.10 +
-    hipDropMarginScore * 0.10 +
+    minLandmarkConfidence * 0.25 +
+    symmetryScore * 0.15 +
+    kneeScore * 0.20 +
+    hipScore * 0.15 +
+    hipDropScore * 0.15 +
     scaleScore * 0.10
   );
 
