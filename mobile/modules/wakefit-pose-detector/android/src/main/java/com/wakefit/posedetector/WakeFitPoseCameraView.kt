@@ -64,6 +64,12 @@ class WakeFitPoseCameraView(
   private var loggedFirstFrame = false
   private var loggedFirstPose = false
 
+  // Permanent destruction guard - once flipped we never reuse this view.
+  // The flag is set in destroyResources() so we can call it from any
+  // lifecycle callback (onDetachedFromWindow for permanent detach, or any
+  // future cleanup hook) without risking double-close.
+  private var destroyed = false
+
   private val onPoseFrame by EventDispatcher()
   private val onCameraError by EventDispatcher()
 
@@ -73,7 +79,7 @@ class WakeFitPoseCameraView(
       if (field == normalized) return
       field = normalized
       cameraFacingValue = normalized
-      if (isAttachedToWindow) {
+      if (isAttachedToWindow && !destroyed) {
         restartCamera()
       }
     }
@@ -96,6 +102,27 @@ class WakeFitPoseCameraView(
         ViewGroup.LayoutParams.MATCH_PARENT,
       ),
     )
+
+    // Distinguish temporary detach (e.g. RecyclerView recycle, scroll off)
+    // from permanent destruction. Temporary detach keeps the ML Kit
+    // detector and analysisExecutor alive so the next attach is cheap;
+    // permanent destroy closes everything via destroyResources().
+    addOnAttachStateChangeListener(
+      object : android.view.View.OnAttachStateChangeListener {
+        override fun onViewAttachedToWindow(v: android.view.View) {
+          Log.i(TAG, "attach-state attached")
+        }
+
+        override fun onViewDetachedFromWindow(v: android.view.View) {
+          Log.i(TAG, "attach-state detached (will be destroyed if window is gone)")
+          if (!destroyed && !hasWindowFocus()) {
+            // The view left the window with no intent of returning soon.
+            // Treat this as the final destroy path.
+            destroyResources()
+          }
+        }
+      },
+    )
   }
 
   override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
@@ -114,13 +141,10 @@ class WakeFitPoseCameraView(
   }
 
   override fun onDetachedFromWindow() {
+    // Temporary detach: stop the camera and clear the overlay, but keep the
+    // detector and executor alive so the view can resume when re-attached.
     stopCamera()
     super.onDetachedFromWindow()
-  }
-
-  override fun onViewRemoved(child: android.view.View?) {
-    super.onViewRemoved(child)
-    // Final cleanup when view is removed from hierarchy
   }
 
   private fun restartCamera() {
@@ -129,6 +153,9 @@ class WakeFitPoseCameraView(
   }
 
   private fun maybeStartCamera() {
+    if (destroyed) {
+      return
+    }
     if (!isAttachedToWindow || cameraProvider != null) {
       return
     }
@@ -143,7 +170,7 @@ class WakeFitPoseCameraView(
       Log.i(TAG, "waiting for ViewPort to be available")
       // Post to wait for next layout pass when ViewPort will be ready
       post {
-        if (pendingBind && previewView.viewPort != null) {
+        if (pendingBind && previewView.viewPort != null && !destroyed) {
           pendingBind = false
           startCamera()
         }
@@ -271,12 +298,44 @@ class WakeFitPoseCameraView(
 
   /**
    * Final cleanup - called when the view is permanently destroyed.
-   * This is the proper place to release detector and executor resources.
+   *
+   * DISTINGUISHED FROM onDetachedFromWindow:
+   *   - onDetachedFromWindow is **temporary** (e.g. RecyclerView scrolled the
+   *     view off-screen). We only stop the camera + clear overlay; the
+   *     detector and executor are kept alive so re-attaching is cheap.
+   *   - destroyResources() is **permanent**. We close the ML Kit detector,
+   *     shut down the analysisExecutor, and flip the `destroyed` flag so
+   *     every other code path bails out instead of trying to reuse the
+   *     resources.
+   *
+   * Call sites:
+   *   - OnAttachStateChangeListener.onViewDetachedFromWindow when the view
+   *     leaves the window with no expectation of returning.
+   *   - Any future cleanup hook added by ExpoModulesCore that fires after
+   *     the view is permanently removed (e.g. via a finalizer or
+   *     Lifecycle.onDestroy of the activity).
+   *
+   * The method is idempotent: calling it twice is a no-op so accidental
+   * double-destroys cannot crash the app.
    */
   fun destroyResources() {
+    if (destroyed) {
+      Log.i(TAG, "destroyResources already called, skipping")
+      return
+    }
+    destroyed = true
     Log.i(TAG, "destroying resources detector and executor")
-    detector.close()
-    analysisExecutor.shutdown()
+    stopCamera()
+    try {
+      detector.close()
+    } catch (error: Throwable) {
+      Log.w(TAG, "detector.close() threw: ${error.message}")
+    }
+    try {
+      analysisExecutor.shutdown()
+    } catch (error: Throwable) {
+      Log.w(TAG, "analysisExecutor.shutdown() threw: ${error.message}")
+    }
   }
 
   /**
@@ -284,6 +343,10 @@ class WakeFitPoseCameraView(
    * Token parameter ensures stale frames from previous camera session are discarded.
    */
   private fun analyzeImage(imageProxy: ImageProxy, bindToken: Int) {
+    if (destroyed) {
+      imageProxy.close()
+      return
+    }
     if (bindToken != cameraStartToken) {
       Log.i(TAG, "discard stale frame token=$bindToken current=$cameraStartToken")
       imageProxy.close()
@@ -371,10 +434,36 @@ class WakeFitPoseCameraView(
       return
     }
 
-    // ML Kit coordinates are in rotated (upright) image space
-    val (uprightWidth, uprightHeight) = getUprightDimensions(sourceWidth, sourceHeight, imageProxy.imageInfo.rotationDegrees)
+    // ML Kit coordinates are in rotated (upright) image space.
+    // Upright dimensions swap axes on 90/270 rotations.
+    val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+    val cropRect = imageProxy.cropRect
+    val isFrontCamera = frameFacing == "front"
+    val (uprightWidth, uprightHeight) = PoseCoordinateMapper.uprightDimensions(
+      rawWidth = sourceWidth,
+      rawHeight = sourceHeight,
+      rotationDegrees = rotationDegrees,
+    )
 
-    val landmarks = collectAllPosePoints(pose, uprightWidth, uprightHeight)
+    // Run every landmark through the pure mapper so the contract
+    // ("canonical = upright-top-left-unmirrored; overlay source = raw ML Kit
+    // point with no extra mirror") is exercised in production.
+    val rawLandmarks = collectRawPosePoints(pose)
+    val landmarks = rawLandmarks.map { point ->
+      val mapped = PoseCoordinateMapper.mapPoint(
+        pointX = point.x,
+        pointY = point.y,
+        rawWidth = sourceWidth,
+        rawHeight = sourceHeight,
+        cropLeft = cropRect.left,
+        cropTop = cropRect.top,
+        cropRight = cropRect.right,
+        cropBottom = cropRect.bottom,
+        rotationDegrees = rotationDegrees,
+        isFrontCamera = isFrontCamera,
+      )
+      point.copy(x = mapped.canonicalX, y = mapped.canonicalY)
+    }
 
     if (!loggedFirstPose && landmarks.isNotEmpty()) {
       loggedFirstPose = true
@@ -409,8 +498,13 @@ class WakeFitPoseCameraView(
   /**
    * Compute transformation matrix for overlay using CameraX official API.
    *
-   * Uses ImageProxyTransformFactory + PreviewView.outputTransform + CoordinateTransform
-   * to properly map from analysis image coordinates to view coordinates.
+   * Contract: ML Kit PoseLandmark.position arrives in the **rotated-upright**
+   * pixel space (because we called `InputImage.fromMediaImage(mediaImage,
+   * rotationDegrees)`). The canonical PoseFrame we ship to JS is exactly
+   * those upright coords (mirrored once for front camera via
+   * [PoseCoordinateMapper]). The overlay is fed the same canonical
+   * coordinates, and the CameraX factory / OutputTransform pipeline maps
+   * them onto the PreviewView.
    *
    * Returns null if transforms are not available, in which case the overlay
    * will not be drawn but canonical PoseFrame will still be sent to JS.
@@ -419,7 +513,12 @@ class WakeFitPoseCameraView(
     // Get target transformation (PreviewView)
     val targetTransform = previewView.outputTransform ?: return null
 
-    // Create source transformation from ImageProxy
+    // Create source transformation from ImageProxy.
+    // We keep the CameraX defaults (using cropRect + rotation degrees)
+    // because the UseCaseGroup ViewPort ensures Preview and ImageAnalysis
+    // share the same cropRect, so ML Kit's upright pixel coords line up
+    // with the matrix after the factory applies the corresponding
+    // translation and rotation.
     val factory = ImageProxyTransformFactory()
     factory.setUsingCropRect(true)
     factory.setUsingRotationDegrees(true)
@@ -436,17 +535,13 @@ class WakeFitPoseCameraView(
     return resultMatrix
   }
 
-  private fun getUprightDimensions(sourceWidth: Int, sourceHeight: Int, rotationDegrees: Int): Pair<Int, Int> {
-    return when (rotationDegrees) {
-      90, 270 -> Pair(sourceHeight, sourceWidth)
-      else -> Pair(sourceWidth, sourceHeight)
-    }
-  }
-
   /**
-   * Collect ALL 12 pose landmarks in canonical upright-top-left-unmirrored pixel coordinates.
+   * Collect the raw 12 pose landmarks in ML Kit's rotated-upright pixel
+   * space. The PoseCoordinateMapper is responsible for turning these into
+   * the canonical upright-top-left-unmirrored PoseFrame before they leave
+   * the module.
    */
-  private fun collectAllPosePoints(pose: Pose, imageWidth: Int, imageHeight: Int): List<WakeFitPosePoint> {
+  private fun collectRawPosePoints(pose: Pose): List<WakeFitPosePoint> {
     val requiredTypes = listOf(
       PoseLandmark.LEFT_SHOULDER to "leftShoulder",
       PoseLandmark.RIGHT_SHOULDER to "rightShoulder",

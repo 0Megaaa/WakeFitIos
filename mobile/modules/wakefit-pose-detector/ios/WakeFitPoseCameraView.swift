@@ -30,7 +30,12 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
   private var cameraGeneration: Int = 0
   private var cameraFacingValue: String = "front"
   private var activeFacing: String = "front"
-  private var isProcessingFrame: Bool = false
+  // Generation token for the currently in-flight Vision request, if any.
+  // `nil` means no detection is running. Otherwise the value is the
+  // generation the request was started under; the request only gets to
+  // clear it when its generation is still the active one. This stops an
+  // old front-camera task from clearing the new back-camera task's state.
+  private var processingGeneration: Int? = nil
   private var isAttached: Bool = false
 
   // Logging
@@ -150,13 +155,16 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
     let generation = cameraGeneration + 1
     cameraGeneration = generation
 
-    // Clear sample buffer delegate first
+    // Clear sample buffer delegate first so no new frames enter the pipeline
     videoOutput?.setSampleBufferDelegate(nil, queue: nil)
 
     let session = captureSession
     captureSession = nil
     videoOutput = nil
-    isProcessingFrame = false
+    // Forcefully invalidate the in-flight processing token: any Vision
+    // request that later wakes up will see `cameraGeneration != itsToken`
+    // and bail out without clearing the new state.
+    processingGeneration = nil
     loggedFirstFrame = false
     loggedFirstPose = false
     emittedVisionUnavailable = false
@@ -268,7 +276,11 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
       return
     }
 
-    if isProcessingFrame {
+    // Only skip a frame if a request for the CURRENT generation is already
+    // running. An in-flight request for a stale generation will be rejected
+    // when it finishes and must not block the active generation from
+    // starting a new request.
+    if processingGeneration == cameraGeneration {
       return
     }
 
@@ -295,7 +307,7 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
     let currentSession = captureSession
     let currentOutput = videoOutput
 
-    isProcessingFrame = true
+    processingGeneration = currentGeneration
     detectPose(in: pixelBuffer, generation: currentGeneration, facing: currentFacing, session: currentSession, output: currentOutput)
   }
 
@@ -322,7 +334,7 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
             captureSession != nil else {
         NSLog("WakeFitCamera discard stale Vision result gen=%d current=%d facing=%@ active=%@",
               generation, cameraGeneration, facing, activeFacing)
-        isProcessingFrame = false
+        clearProcessingIfCurrent(generation)
         return
       }
 
@@ -331,7 +343,7 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
           guard let self, self.cameraGeneration == generation else { return }
           self.overlayView.clearPose()
         }
-        isProcessingFrame = false
+        clearProcessingIfCurrent(generation)
         return
       }
 
@@ -376,7 +388,16 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
       }
     }
 
-    isProcessingFrame = false
+    clearProcessingIfCurrent(generation)
+  }
+
+  /// Clear the processing token only if the token we're clearing belongs
+  /// to this generation. A stale front-camera request finishing late must
+  /// not clear the new back-camera request's token.
+  private func clearProcessingIfCurrent(_ generation: Int) {
+    if processingGeneration == generation {
+      processingGeneration = nil
+    }
   }
 
   @available(iOS 14.0, *)

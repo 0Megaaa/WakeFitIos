@@ -1,4 +1,5 @@
 import { classifySquatPoseFrame, THRESHOLDS, type SquatPoseClassification } from './squatPoseClassifier.ts';
+import { normalizeTargetCount } from '../alarm/alarm.ts';
 import type {
   PoseFrame,
   PushUpPhase,
@@ -17,6 +18,7 @@ const DEFAULT_MIN_STABLE_FRAMES = 2;
 const SQUAT_MIN_STABLE_FRAMES = 3;
 const BASELINE_SAMPLE_COUNT = 3;
 const MAX_TRANSITION_DURATION_MS = 2000;
+const INVALID_DURATION_THRESHOLD_MS = 700;
 
 export function calculateAngle(a: { x: number; y: number }, vertex: { x: number; y: number }, c: { x: number; y: number }): number {
   const ab = { x: a.x - vertex.x, y: a.y - vertex.y };
@@ -30,7 +32,7 @@ export function calculateAngle(a: { x: number; y: number }, vertex: { x: number;
 }
 
 export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpCounter {
-  const targetCount = options.targetCount ?? DEFAULT_TARGET_COUNT;
+  const targetCount = normalizeTargetCount(options.targetCount);
   const minConfidence = options.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
   const downAngle = options.downAngle ?? 90;
   const upAngle = options.upAngle ?? 160;
@@ -133,7 +135,7 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
  * - transition: qualityIssue == 'ok' && label == 'unknown' -> time-based timeout
  */
 export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCounter {
-  const targetCount = options.targetCount ?? DEFAULT_TARGET_COUNT;
+  const targetCount = normalizeTargetCount(options.targetCount);
   const minConfidence = options.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
   const minStableFrames = Math.max(SQUAT_MIN_STABLE_FRAMES, Math.trunc(options.minStableFrames ?? DEFAULT_MIN_STABLE_FRAMES));
 
@@ -152,8 +154,8 @@ export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCou
   // Transition tracking with time-based timeout
   let transitionStartTime: number | null = null;
 
-  // Invalid frame counter
-  let invalidFrameCount = 0;
+  // Invalid frame time gate (instead of fixed 3-frame counter)
+  let invalidStartTimestampMs: number | null = null;
 
   function getBaselineHipY(): number | null {
     if (baselineHipYSamples.length === 0) return null;
@@ -213,22 +215,25 @@ export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCou
 
       // Handle invalid frames (qualityIssue != 'ok')
       if (classification.qualityIssue !== 'ok') {
-        invalidFrameCount += 1;
+        if (invalidStartTimestampMs === null) {
+          invalidStartTimestampMs = frame.timestampMs;
+        }
 
-        // If too many invalid frames, reset to waiting
-        if (phase === 'waiting_for_body' || invalidFrameCount > 3) {
+        // If too long in invalid state, reset to waiting
+        const invalidDuration = frame.timestampMs - invalidStartTimestampMs;
+        if (phase === 'waiting_for_body' || invalidDuration >= INVALID_DURATION_THRESHOLD_MS) {
           phase = 'waiting_for_body';
           currentPose = null;
           currentPoseFrames = 0;
-          invalidFrameCount = 0;
+          invalidStartTimestampMs = null;
           transitionStartTime = null;
           clearBaseline();
         }
         return currentResult(false);
       }
 
-      // Reset invalid counter when we get a valid frame
-      invalidFrameCount = 0;
+      // Reset invalid tracking when we get a valid frame
+      invalidStartTimestampMs = null;
 
       // Handle transition frames (qualityIssue == 'ok' && label == 'unknown')
       if (classification.label === 'unknown') {
@@ -323,7 +328,7 @@ export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCou
       lastKneeAngle = null;
       currentPose = null;
       currentPoseFrames = 0;
-      invalidFrameCount = 0;
+      invalidStartTimestampMs = null;
       transitionStartTime = null;
       clearBaseline();
       return currentResult(false);
@@ -334,7 +339,7 @@ export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCou
       lastKneeAngle = null;
       currentPose = null;
       currentPoseFrames = 0;
-      invalidFrameCount = 0;
+      invalidStartTimestampMs = null;
       transitionStartTime = null;
       clearBaseline();
       return currentResult(false);

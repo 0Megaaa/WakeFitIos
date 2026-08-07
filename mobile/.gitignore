@@ -32,6 +32,14 @@ android/local.properties
 *.apk
 *.aab
 
+# Expo local native module build outputs
+modules/**/android/build/
+modules/**/android/.gradle/
+modules/**/android/.cxx/
+modules/**/android/.kotlin/
+**/.kotlin/
+**/.gradle/
+
 # iOS
 ios/Pods/
 ios/build/

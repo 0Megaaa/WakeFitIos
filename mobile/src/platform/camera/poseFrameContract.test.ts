@@ -7,6 +7,16 @@ import { evaluatePoseQuality } from '../../domain/exercise/poseQuality.ts';
 import { createSquatCounter } from '../../domain/exercise/pushupCounter.ts';
 
 /**
+ * Assert that every frame in `frames` is non-null. Spread-arg form
+ * (`assert.ok(...frames)`) is rejected by TypeScript's strict types.
+ */
+function assertAllFramesOk<T>(frames: Array<T | null | undefined>): asserts frames is T[] {
+  for (const f of frames) {
+    assert.ok(f, 'expected every adapter frame to be non-null');
+  }
+}
+
+/**
  * Cross-platform consistency tests for the unified PoseFrame contract.
  *
  * These tests verify that:
@@ -85,18 +95,23 @@ function completeSquattingEvent(timestampMs: number, overrides: Partial<NativePo
     source: 'apple-vision',
     coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
-      // Squat: shoulder drops with hip, knees very forward
-      // Standing hip at y=220, so squat hip at y=400 (torso stays ~280px)
-      // Standing shoulder at y=80, so squat shoulder at y=260 (torso 140px * 2 = 280px)
-      { name: 'leftShoulder', x: 150, y: 260, confidence: 0.95 },
-      { name: 'rightShoulder', x: 490, y: 260, confidence: 0.95 },
-      { name: 'leftHip', x: 150, y: 400, confidence: 0.95 },
-      { name: 'rightHip', x: 490, y: 400, confidence: 0.95 },
-      // Knee very forward
-      { name: 'leftKnee', x: 100, y: 350, confidence: 0.95 },
-      { name: 'rightKnee', x: 540, y: 350, confidence: 0.95 },
-      { name: 'leftAnkle', x: 150, y: 450, confidence: 0.95 },
-      { name: 'rightAnkle', x: 490, y: 450, confidence: 0.95 },
+      // Squat: torso leans forward (symmetric), hip drops, knees very forward (symmetric)
+      // Standing baseline: shoulder y=80, hip y=220, knee y=350, ankle y=440
+      // Squat (symmetric):
+      //   - Shoulders above and slightly forward of hips (leaning)
+      //   - Hips at (320, 320) center, dropped 100px
+      //   - Knees at extreme forward positions, y=420
+      //   - Ankles at y=460
+      // Result: hip angle ~ 100-110° (≤120), knee angle ~80-90° (≤120)
+      { name: 'leftShoulder', x: 280, y: 160, confidence: 0.95 },
+      { name: 'rightShoulder', x: 360, y: 160, confidence: 0.95 },
+      { name: 'leftHip', x: 280, y: 320, confidence: 0.95 },
+      { name: 'rightHip', x: 360, y: 320, confidence: 0.95 },
+      // Knees very forward (symmetric, outside shoulder/hip)
+      { name: 'leftKnee', x: 100, y: 420, confidence: 0.95 },
+      { name: 'rightKnee', x: 540, y: 420, confidence: 0.95 },
+      { name: 'leftAnkle', x: 280, y: 460, confidence: 0.95 },
+      { name: 'rightAnkle', x: 360, y: 460, confidence: 0.95 },
     ],
     ...overrides,
   };
@@ -476,11 +491,12 @@ describe('PoseFrame contract consistency', () => {
       assert.equal(result.qualityIssue, 'ok');
     });
 
-    it('classifies squatting pose correctly', () => {
+    it('classifies squatting pose without baseline as unknown', () => {
       const frame = nativePoseEventToFrame(completeSquattingEvent(1000));
       assert.ok(frame);
       const result = classifySquatPoseFrame(frame);
-      assert.equal(result.label, 'squatting', 'knees bent forward should be squatting');
+      // Without baseline, squatting cannot be confirmed - classifier returns unknown
+      assert.equal(result.label, 'unknown', 'squatting without baseline must be unknown');
       assert.equal(result.qualityIssue, 'ok');
     });
 
@@ -565,21 +581,26 @@ describe('PoseFrame contract consistency', () => {
 
       const f1 = nativePoseEventToFrame(completeStandingEvent(1000));
       const f2 = nativePoseEventToFrame(completeStandingEvent(1100));
-      const f3 = nativePoseEventToFrame(completeSquattingEvent(2000));
-      const f4 = nativePoseEventToFrame(completeSquattingEvent(2100));
-      const f5 = nativePoseEventToFrame(completeStandingEvent(3000));
-      const f6 = nativePoseEventToFrame(completeStandingEvent(3100));
+      const f3 = nativePoseEventToFrame(completeStandingEvent(1200));
+      const f4 = nativePoseEventToFrame(completeSquattingEvent(2000));
+      const f5 = nativePoseEventToFrame(completeSquattingEvent(2100));
+      const f6 = nativePoseEventToFrame(completeSquattingEvent(2200));
+      const f7 = nativePoseEventToFrame(completeStandingEvent(3000));
+      const f8 = nativePoseEventToFrame(completeStandingEvent(3100));
+      const f9 = nativePoseEventToFrame(completeStandingEvent(3200));
 
-      assert.ok(f1 && f2 && f3 && f4 && f5 && f6);
+      assert.ok(f1 && f2 && f3 && f4 && f5 && f6 && f7 && f8 && f9);
 
       counter.handleFrame(f1);
       counter.handleFrame(f2);
       counter.handleFrame(f3);
       counter.handleFrame(f4);
-      const result = counter.handleFrame(f5);
-      assert.equal(result.count, 0, 'should not count until 2 standing frames after squat');
-      const result2 = counter.handleFrame(f6);
-      assert.equal(result2.count, 1, 'should count after full cycle');
+      counter.handleFrame(f5);
+      counter.handleFrame(f6);
+      counter.handleFrame(f7);
+      counter.handleFrame(f8);
+      const result = counter.handleFrame(f9);
+      assert.equal(result.count, 1, 'should count after full cycle');
     });
 
     it('does not count when starting already squatting', () => {
@@ -591,16 +612,17 @@ describe('PoseFrame contract consistency', () => {
       // User returns to standing
       const f3 = nativePoseEventToFrame(completeStandingEvent(2000));
       const f4 = nativePoseEventToFrame(completeStandingEvent(2100));
+      const f5 = nativePoseEventToFrame(completeStandingEvent(2200));
 
-      assert.ok(f1 && f2 && f3 && f4);
+      assert.ok(f1 && f2 && f3 && f4 && f5);
 
       counter.handleFrame(f1);
       counter.handleFrame(f2);
-      const standingResult = counter.handleFrame(f3);
-      const finalResult = counter.handleFrame(f4);
+      counter.handleFrame(f3);
+      counter.handleFrame(f4);
+      const finalResult = counter.handleFrame(f5);
 
-      assert.equal(standingResult.count, 0, 'should not count when starting in squat');
-      assert.equal(finalResult.count, 0, 'should not count on return to standing');
+      assert.equal(finalResult.count, 0, 'should not count when starting in squat');
       assert.equal(finalResult.phase, 'ready');
     });
 
@@ -613,28 +635,34 @@ describe('PoseFrame contract consistency', () => {
       // Return to standing
       const f3 = nativePoseEventToFrame(completeStandingEvent(2000));
       const f4 = nativePoseEventToFrame(completeStandingEvent(2100));
+      const f5 = nativePoseEventToFrame(completeStandingEvent(2200));
 
-      assert.ok(f1 && f2 && f3 && f4);
+      assert.ok(f1 && f2 && f3 && f4 && f5);
 
       counter.handleFrame(f1);
       counter.handleFrame(f2);
       counter.handleFrame(f3);
-      const result = counter.handleFrame(f4);
+      counter.handleFrame(f4);
+      const result = counter.handleFrame(f5);
       assert.equal(result.count, 0, 'no count yet - needs full cycle');
       assert.equal(result.phase, 'ready');
 
       // Complete the cycle
-      const f5 = nativePoseEventToFrame(completeSquattingEvent(3000));
-      const f6 = nativePoseEventToFrame(completeSquattingEvent(3100));
-      const f7 = nativePoseEventToFrame(completeStandingEvent(4000));
-      const f8 = nativePoseEventToFrame(completeStandingEvent(4100));
+      const f6 = nativePoseEventToFrame(completeSquattingEvent(3000));
+      const f7 = nativePoseEventToFrame(completeSquattingEvent(3100));
+      const f8 = nativePoseEventToFrame(completeSquattingEvent(3200));
+      const f9 = nativePoseEventToFrame(completeStandingEvent(4000));
+      const f10 = nativePoseEventToFrame(completeStandingEvent(4100));
+      const f11 = nativePoseEventToFrame(completeStandingEvent(4200));
 
-      assert.ok(f5 && f6 && f7 && f8);
+      assert.ok(f6 && f7 && f8 && f9 && f10 && f11);
 
-      counter.handleFrame(f5);
       counter.handleFrame(f6);
       counter.handleFrame(f7);
-      const countResult = counter.handleFrame(f8);
+      counter.handleFrame(f8);
+      counter.handleFrame(f9);
+      counter.handleFrame(f10);
+      const countResult = counter.handleFrame(f11);
       assert.equal(countResult.count, 1, 'should count after full cycle');
     });
 
@@ -645,19 +673,25 @@ describe('PoseFrame contract consistency', () => {
         const offset = i * 5000;
         const standing1 = nativePoseEventToFrame(completeStandingEvent(1000 + offset));
         const standing2 = nativePoseEventToFrame(completeStandingEvent(1100 + offset));
+        const standing3 = nativePoseEventToFrame(completeStandingEvent(1200 + offset));
         const squatting1 = nativePoseEventToFrame(completeSquattingEvent(2000 + offset));
         const squatting2 = nativePoseEventToFrame(completeSquattingEvent(2100 + offset));
-        const standing3 = nativePoseEventToFrame(completeStandingEvent(3000 + offset));
-        const standing4 = nativePoseEventToFrame(completeStandingEvent(3100 + offset));
+        const squatting3 = nativePoseEventToFrame(completeSquattingEvent(2200 + offset));
+        const standing4 = nativePoseEventToFrame(completeStandingEvent(3000 + offset));
+        const standing5 = nativePoseEventToFrame(completeStandingEvent(3100 + offset));
+        const standing6 = nativePoseEventToFrame(completeStandingEvent(3200 + offset));
 
-        assert.ok(standing1 && standing2 && squatting1 && squatting2 && standing3 && standing4);
+        assert.ok(standing1 && standing2 && standing3 && squatting1 && squatting2 && squatting3 && standing4 && standing5 && standing6);
 
         counter.handleFrame(standing1);
         counter.handleFrame(standing2);
+        counter.handleFrame(standing3);
         counter.handleFrame(squatting1);
         counter.handleFrame(squatting2);
-        counter.handleFrame(standing3);
+        counter.handleFrame(squatting3);
         counter.handleFrame(standing4);
+        counter.handleFrame(standing5);
+        counter.handleFrame(standing6);
       }
 
       const finalFrame = nativePoseEventToFrame(completeStandingEvent(26000));
@@ -714,6 +748,296 @@ describe('PoseFrame contract consistency', () => {
       const frame = nativePoseEventToFrame(event);
       assert.ok(frame);
       assert.equal(frame.cameraFacing, 'back');
+    });
+  });
+
+  describe('misidentification guards (rule coverage)', () => {
+    // Each test below MUST actually trigger the corresponding rule. If a
+    // future refactor weakens the rule, the relevant test here will fail,
+    // so these tests pin down the production behavior required by the V1.5
+    // brief.
+
+    it('1. starting already squatting then returning to standing does not count', () => {
+      const counter = createSquatCounter({ targetCount: 5 });
+      const f1 = nativePoseEventToFrame(completeSquattingEvent(1000));
+      const f2 = nativePoseEventToFrame(completeSquattingEvent(1100));
+      const f3 = nativePoseEventToFrame(completeSquattingEvent(1200));
+      const f4 = nativePoseEventToFrame(completeStandingEvent(2000));
+      const f5 = nativePoseEventToFrame(completeStandingEvent(2100));
+      const f6 = nativePoseEventToFrame(completeStandingEvent(2200));
+      assert.ok(f1 && f2 && f3 && f4 && f5 && f6);
+      counter.handleFrame(f1);
+      counter.handleFrame(f2);
+      counter.handleFrame(f3);
+      counter.handleFrame(f4);
+      counter.handleFrame(f5);
+      const result = counter.handleFrame(f6);
+      assert.equal(result.count, 0);
+      assert.equal(result.phase, 'ready');
+    });
+
+    it('2. single squat noise frame is rejected (count stays 0)', () => {
+      const counter = createSquatCounter({ targetCount: 5 });
+      const baselines = [1000, 1100, 1200].map((t) =>
+        nativePoseEventToFrame(completeStandingEvent(t)),
+      );
+      assertAllFramesOk(baselines);
+      baselines.forEach((f) => counter.handleFrame(f!));
+      // One isolated squat frame without stable follow-up.
+      const noise = nativePoseEventToFrame(completeSquattingEvent(2000));
+      assert.ok(noise);
+      const r1 = counter.handleFrame(noise);
+      assert.equal(r1.count, 0);
+      // Then go straight back to standing without 3 stable squat frames.
+      const back = [2100, 2200, 2300].map((t) =>
+        nativePoseEventToFrame(completeStandingEvent(t)),
+      );
+      assertAllFramesOk(back);
+      let final = r1;
+      for (const f of back) {
+        final = counter.handleFrame(f!);
+      }
+      assert.equal(final.count, 0, 'single squat noise frame must not count');
+    });
+
+    it('3. lunge (knee angle asymmetry > MAX_KNEE_ASYMMETRY) does not count', () => {
+      // Lunge: one knee bent forward, other nearly straight → big asymmetry.
+      // We use 3 standing frames to set baseline, then 3 asymmetric frames.
+      const counter = createSquatCounter({ targetCount: 5 });
+      const baselineFrames = [1000, 1100, 1200].map((t) =>
+        nativePoseEventToFrame(completeStandingEvent(t)),
+      );
+      assertAllFramesOk(baselineFrames);
+      baselineFrames.forEach((f) => counter.handleFrame(f!));
+
+      const lungeEvent: NativePoseFrameEvent = {
+        timestampMs: 2000,
+        imageWidth: 640,
+        imageHeight: 480,
+        cameraFacing: 'front',
+        source: 'apple-vision',
+        coordinateSpace: 'upright-top-left-unmirrored',
+        landmarks: [
+          { name: 'leftShoulder', x: 280, y: 160, confidence: 0.95 },
+          { name: 'rightShoulder', x: 360, y: 160, confidence: 0.95 },
+          { name: 'leftHip', x: 280, y: 320, confidence: 0.95 },
+          { name: 'rightHip', x: 360, y: 320, confidence: 0.95 },
+          // LEFT knee very forward + low (≈90°); RIGHT knee almost straight.
+          { name: 'leftKnee', x: 100, y: 420, confidence: 0.95 },
+          { name: 'rightKnee', x: 460, y: 350, confidence: 0.95 },
+          { name: 'leftAnkle', x: 280, y: 460, confidence: 0.95 },
+          { name: 'rightAnkle', x: 360, y: 460, confidence: 0.95 },
+        ],
+      };
+      // Build 3 stable asymmetric frames.
+      const lungeFrames: NativePoseFrameEvent[] = [];
+      for (let i = 0; i < 3; i++) {
+        lungeFrames.push({ ...lungeEvent, timestampMs: 2000 + i * 100 });
+      }
+      const lungePoseFrames = lungeFrames.map((e) => nativePoseEventToFrame(e));
+      assertAllFramesOk(lungePoseFrames);
+      let last: ReturnType<typeof counter.handleFrame> | undefined;
+      for (const f of lungePoseFrames) {
+        last = counter.handleFrame(f);
+      }
+      assert.ok(last);
+      assert.equal(last!.count, 0, 'lunge with asymmetric knees must not count');
+    });
+
+    it('4. knees-only bend without hip drop is not squatting (hipDropRatio fails)', () => {
+      // Knees go forward (low y-bend) but hips do not drop, so the
+      // hip-drop ratio is insufficient for squat classification.
+      const counter = createSquatCounter({ targetCount: 5 });
+      const baselineFrames = [1000, 1100, 1200].map((t) =>
+        nativePoseEventToFrame(completeStandingEvent(t)),
+      );
+      assertAllFramesOk(baselineFrames);
+      baselineFrames.forEach((f) => counter.handleFrame(f!));
+
+      const kneesOnlyEvent: NativePoseFrameEvent = {
+        timestampMs: 2000,
+        imageWidth: 640,
+        imageHeight: 480,
+        cameraFacing: 'front',
+        source: 'apple-vision',
+        coordinateSpace: 'upright-top-left-unmirrored',
+        landmarks: [
+          // Hips unchanged from standing baseline (220).
+          { name: 'leftShoulder', x: 150, y: 80, confidence: 0.95 },
+          { name: 'rightShoulder', x: 490, y: 80, confidence: 0.95 },
+          { name: 'leftHip', x: 150, y: 220, confidence: 0.95 },
+          { name: 'rightHip', x: 490, y: 220, confidence: 0.95 },
+          // Knees bend forward (toward shoulder x) but stay at ~ same y.
+          { name: 'leftKnee', x: 250, y: 380, confidence: 0.95 },
+          { name: 'rightKnee', x: 390, y: 380, confidence: 0.95 },
+          { name: 'leftAnkle', x: 150, y: 440, confidence: 0.95 },
+          { name: 'rightAnkle', x: 490, y: 440, confidence: 0.95 },
+        ],
+      };
+      const kneesOnlyFrames = [0, 1, 2].map((i) =>
+        nativePoseEventToFrame({ ...kneesOnlyEvent, timestampMs: 2000 + i * 100 }),
+      );
+      assertAllFramesOk(kneesOnlyFrames);
+      let last: ReturnType<typeof counter.handleFrame> | undefined;
+      for (const f of kneesOnlyFrames) {
+        last = counter.handleFrame(f);
+      }
+      assert.ok(last);
+      assert.equal(last!.count, 0, 'knees-only bend must not count as squat');
+    });
+
+    it('5. hip drops but hip angle still wide → not squatting', () => {
+      const counter = createSquatCounter({ targetCount: 5 });
+      const baselineFrames = [1000, 1100, 1200].map((t) =>
+        nativePoseEventToFrame(completeStandingEvent(t)),
+      );
+      assertAllFramesOk(baselineFrames);
+      baselineFrames.forEach((f) => counter.handleFrame(f!));
+
+      // Hips drop, knees bend forward, BUT the torso stays upright → hip
+      // angle stays > 120° so the classifier refuses to label it squatting.
+      const wideHipEvent: NativePoseFrameEvent = {
+        timestampMs: 2000,
+        imageWidth: 640,
+        imageHeight: 480,
+        cameraFacing: 'front',
+        source: 'apple-vision',
+        coordinateSpace: 'upright-top-left-unmirrored',
+        landmarks: [
+          { name: 'leftShoulder', x: 150, y: 120, confidence: 0.95 },
+          { name: 'rightShoulder', x: 490, y: 120, confidence: 0.95 },
+          { name: 'leftHip', x: 150, y: 320, confidence: 0.95 },
+          { name: 'rightHip', x: 490, y: 320, confidence: 0.95 },
+          { name: 'leftKnee', x: 100, y: 420, confidence: 0.95 },
+          { name: 'rightKnee', x: 540, y: 420, confidence: 0.95 },
+          { name: 'leftAnkle', x: 150, y: 460, confidence: 0.95 },
+          { name: 'rightAnkle', x: 490, y: 460, confidence: 0.95 },
+        ],
+      };
+      const frames = [0, 1, 2].map((i) =>
+        nativePoseEventToFrame({ ...wideHipEvent, timestampMs: 2000 + i * 100 }),
+      );
+      assertAllFramesOk(frames);
+      let last: ReturnType<typeof counter.handleFrame> | undefined;
+      for (const f of frames) {
+        last = counter.handleFrame(f);
+      }
+      assert.ok(last);
+      assert.equal(last!.count, 0);
+    });
+
+    it('6. person approaches camera (scale change > MAX_SCALE_CHANGE_RATIO) does not count', () => {
+      const counter = createSquatCounter({ targetCount: 5 });
+      const baselineFrames = [1000, 1100, 1200].map((t) =>
+        nativePoseEventToFrame(completeStandingEvent(t)),
+      );
+      assertAllFramesOk(baselineFrames);
+      baselineFrames.forEach((f) => counter.handleFrame(f!));
+
+      // Sudden scale-up event: every landmark roughly 1.6x larger. Standing
+      // baseline scale was ~140 torso pixels; here torso is ~224, well above
+      // the MAX_SCALE_CHANGE_RATIO tolerance.
+      const zoomedInEvent: NativePoseFrameEvent = {
+        timestampMs: 2000,
+        imageWidth: 640,
+        imageHeight: 480,
+        cameraFacing: 'front',
+        source: 'apple-vision',
+        coordinateSpace: 'upright-top-left-unmirrored',
+        landmarks: [
+          { name: 'leftShoulder', x: 230, y: 32, confidence: 0.95 },
+          { name: 'rightShoulder', x: 410, y: 32, confidence: 0.95 },
+          { name: 'leftHip', x: 230, y: 240, confidence: 0.95 },
+          { name: 'rightHip', x: 410, y: 240, confidence: 0.95 },
+          { name: 'leftKnee', x: 230, y: 350, confidence: 0.95 },
+          { name: 'rightKnee', x: 410, y: 350, confidence: 0.95 },
+          { name: 'leftAnkle', x: 230, y: 440, confidence: 0.95 },
+          { name: 'rightAnkle', x: 410, y: 440, confidence: 0.95 },
+        ],
+      };
+      const result = counter.handleFrame(nativePoseEventToFrame(zoomedInEvent)!);
+      assert.equal(result.count, 0, 'scale-change frame must not count');
+    });
+
+    it('7. partial body (missing ankles) yields partial_body qualityIssue', () => {
+      const partialEvent: NativePoseFrameEvent = {
+        ...completeSquatEvent({
+          timestampMs: 1000,
+          landmarks: [
+            { name: 'leftShoulder', x: 150, y: 80, confidence: 0.9 },
+            { name: 'rightShoulder', x: 490, y: 80, confidence: 0.9 },
+            { name: 'leftHip', x: 160, y: 280, confidence: 0.85 },
+            { name: 'rightHip', x: 480, y: 280, confidence: 0.85 },
+            { name: 'leftKnee', x: 165, y: 380, confidence: 0.8 },
+            { name: 'rightKnee', x: 475, y: 380, confidence: 0.8 },
+            // ankles missing
+          ],
+        }),
+      };
+      const frame = nativePoseEventToFrame(partialEvent);
+      assert.ok(frame);
+      const quality = evaluatePoseQuality(frame, { exerciseType: 'squat' });
+      assert.equal(quality.issue, 'partial_body');
+    });
+
+    it('8. low confidence landmarks yield low_confidence qualityIssue', () => {
+      const lowConfEvent: NativePoseFrameEvent = completeSquatEvent({
+        timestampMs: 1000,
+        landmarks: [
+          { name: 'leftShoulder', x: 150, y: 80, confidence: 0.2 },
+          { name: 'rightShoulder', x: 490, y: 80, confidence: 0.2 },
+          { name: 'leftHip', x: 160, y: 280, confidence: 0.2 },
+          { name: 'rightHip', x: 480, y: 280, confidence: 0.2 },
+          { name: 'leftKnee', x: 165, y: 380, confidence: 0.2 },
+          { name: 'rightKnee', x: 475, y: 380, confidence: 0.2 },
+          { name: 'leftAnkle', x: 170, y: 460, confidence: 0.2 },
+          { name: 'rightAnkle', x: 470, y: 460, confidence: 0.2 },
+        ],
+      });
+      const frame = nativePoseEventToFrame(lowConfEvent);
+      assert.ok(frame);
+      const quality = evaluatePoseQuality(frame, { exerciseType: 'squat' });
+      assert.equal(quality.issue, 'low_confidence');
+    });
+
+    it('9. one clean squat counts 1 (rule 9: full one squat)', () => {
+      const counter = createSquatCounter({ targetCount: 5 });
+      const frames: Array<ReturnType<typeof nativePoseEventToFrame>> = [];
+      [1000, 1100, 1200].forEach((t) => frames.push(nativePoseEventToFrame(completeStandingEvent(t))));
+      [2000, 2100, 2200].forEach((t) => frames.push(nativePoseEventToFrame(completeSquattingEvent(t))));
+      [3000, 3100, 3200].forEach((t) => frames.push(nativePoseEventToFrame(completeStandingEvent(t))));
+      assertAllFramesOk(frames);
+      let last: ReturnType<typeof counter.handleFrame> | undefined;
+      for (const f of frames) {
+        last = counter.handleFrame(f);
+      }
+      assert.ok(last);
+      assert.equal(last!.count, 1);
+    });
+
+    it('10. five clean squats count 5 (rule 10: full five squats)', () => {
+      const counter = createSquatCounter({ targetCount: 5 });
+      let last: ReturnType<typeof counter.handleFrame> | undefined;
+      for (let i = 0; i < 5; i++) {
+        const offset = i * 5000;
+        const frames: Array<ReturnType<typeof nativePoseEventToFrame>> = [];
+        [1000 + offset, 1100 + offset, 1200 + offset].forEach((t) =>
+          frames.push(nativePoseEventToFrame(completeStandingEvent(t))),
+        );
+        [2000 + offset, 2100 + offset, 2200 + offset].forEach((t) =>
+          frames.push(nativePoseEventToFrame(completeSquattingEvent(t))),
+        );
+        [3000 + offset, 3100 + offset, 3200 + offset].forEach((t) =>
+          frames.push(nativePoseEventToFrame(completeStandingEvent(t))),
+        );
+        assertAllFramesOk(frames);
+        for (const f of frames) {
+          last = counter.handleFrame(f);
+        }
+      }
+      assert.ok(last);
+      assert.equal(last!.count, 5);
+      assert.equal(last!.isComplete, true);
     });
   });
 });

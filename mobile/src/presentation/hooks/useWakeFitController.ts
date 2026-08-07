@@ -133,7 +133,7 @@ function normalizeBackendUrl(input: string): string {
 }
 
 function normalizeTimeOfDay(input: string, fallback: string): string {
-  const match = /^(\d{1,2}):(\d{2})$/.exec(input.trim());
+  const match = /^(\d{1,2}):(\d{1,2})$/.exec(input.trim());
   if (!match) {
     return fallback;
   }
@@ -145,6 +145,26 @@ function normalizeTimeOfDay(input: string, fallback: string): string {
   }
 
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+/**
+ * Decide whether `next` represents a user-visible change from `prev`.
+ * Fields the UI binds to are status, count, workout, and any "phase"
+ * surfaced via status. We deliberately ignore `alarmId`, `exerciseType`,
+ * `targetCount` because they do not change mid-challenge.
+ */
+function isSnapshotUserVisibleChange(
+  prev: ChallengeSnapshot | null,
+  next: ChallengeSnapshot | null,
+): boolean {
+  if (prev === null && next !== null) return true;
+  if (prev !== null && next === null) return true;
+  if (prev === null && next === null) return false;
+  if (!prev || !next) return false;
+  if (prev.status !== next.status) return true;
+  if (prev.count !== next.count) return true;
+  if (prev.workout !== next.workout) return true;
+  return false;
 }
 
 function getNextFireAt(timeOfDay: string): string {
@@ -247,6 +267,12 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
   const handledAlarmFireKeys = useRef(new Set<string>());
   const alarmRef = useRef<LocalAlarmConfig | null>(null);
   const lastPoseQualityIssueRef = useRef<string>('ok');
+  // Last snapshot we committed to React state. We compare each new
+  // snapshot's user-visible fields against this reference so we ONLY
+  // call setSnapshot when something the UI actually renders has changed.
+  // Without this, every camera frame (15-30 fps) would trigger a
+  // re-render even when nothing user-visible moved.
+  const lastCommittedSnapshotRef = useRef<ChallengeSnapshot | null>(null);
 
   const [tab, setTab] = useState<ControllerTab>('home');
   const [alarm, setAlarm] = useState<LocalAlarmConfig>(() =>
@@ -313,7 +339,9 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
         workoutDate: getTodayLocalDate(),
       });
       setFlow(nextFlow);
-      setSnapshot(nextFlow.startRinging(fireAt));
+      const initialSnapshot = nextFlow.startRinging(fireAt);
+      lastCommittedSnapshotRef.current = initialSnapshot;
+      setSnapshot(initialSnapshot);
       setRealCameraEnabled(false);
       setTab('home');
       setStatus('闹钟响铃中，完成动作后才能关闭');
@@ -537,7 +565,9 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
     if (!flow) {
       return;
     }
-    setSnapshot(flow.beginChallenge());
+    const nextSnapshot = flow.beginChallenge();
+    lastCommittedSnapshotRef.current = nextSnapshot;
+    setSnapshot(nextSnapshot);
     setStatus('挑战已开始');
   }, [flow]);
 
@@ -547,6 +577,7 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
     }
 
     const nextSnapshot = driveOneSimulatedExercise(flow, snapshot.exerciseType);
+    lastCommittedSnapshotRef.current = nextSnapshot;
     setSnapshot(nextSnapshot);
 
     if (nextSnapshot.status === 'completed' && nextSnapshot.workout) {
@@ -619,7 +650,10 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
     }
 
     const nextSnapshot = flow.handlePoseFrame(frame);
-    setSnapshot(nextSnapshot);
+    if (isSnapshotUserVisibleChange(lastCommittedSnapshotRef.current, nextSnapshot)) {
+      lastCommittedSnapshotRef.current = nextSnapshot;
+      setSnapshot(nextSnapshot);
+    }
 
     if (nextSnapshot.status === 'completed' && nextSnapshot.workout) {
       void recordCompletedWorkoutHandler(nextSnapshot.workout);
@@ -633,6 +667,7 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
   const resetChallenge = useCallback(() => {
     flow?.reset();
     setFlow(null);
+    lastCommittedSnapshotRef.current = null;
     setSnapshot(null);
     setRealCameraEnabled(false);
     // Reset temporary tracking state
@@ -648,6 +683,7 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
     }
 
     setFlow(null);
+    lastCommittedSnapshotRef.current = null;
     setSnapshot(null);
     setRealCameraEnabled(false);
     // Reset temporary tracking state

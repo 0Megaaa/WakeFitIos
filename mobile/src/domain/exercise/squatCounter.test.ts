@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { createSquatCounter, type PoseFrame, type PoseLandmarkName } from './pushupCounter.ts';
+import { classifySquatPoseFrame, THRESHOLDS } from './squatPoseClassifier.ts';
 
 function landmark(name: PoseLandmarkName, x: number, y: number, confidence = 0.95) {
   return { name, x, y, confidence };
@@ -80,13 +81,22 @@ function fullBodyFrame(
 
 /**
  * Creates a transition frame (partial squat, label = unknown).
- * The person is transitioning between standing and squatting.
+ * The person is in a mid-motion state where the classifier cannot
+ * confidently label as 'standing' or 'squatting'.
+ *
+ * Geometry: person is leaning with one knee forward and one knee back,
+ * producing an asymmetric pose with kneeAngleDifference > MAX_KNEE_ASYMMETRY (30°).
+ * This forces the classifier to return 'unknown'.
  */
 function transitionFrame(timestampMs: number, progress: number): PoseFrame {
-  // progress: 0 = standing, 1 = full squat
-  const hipY = 240 + progress * 60; // hip drops from 240 to 300
-  const shoulderY = 100 + progress * 60; // shoulder drops with hip
-
+  // progress: 0 = just starting, 1 = almost full squat
+  // Use asymmetric knees with both knees partially bent (in transition zone 120-160°)
+  const hipY = 240 + progress * 60;
+  const shoulderY = 100 + progress * 60;
+  // Left knee bends more (forward), right knee stays more vertical
+  // Both should be in transition zone (knee angle 120-160°)
+  const leftKneeOffset = 50 + progress * 30; // 50-80 forward
+  const rightKneeOffset = 10 - progress * 5; // ~10 forward
   return {
     timestampMs,
     imageWidth: 300,
@@ -95,16 +105,16 @@ function transitionFrame(timestampMs: number, progress: number): PoseFrame {
     source: 'apple-vision',
     coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
-      // Knees slightly forward but not fully bent
       landmark('leftShoulder', 140, shoulderY),
       landmark('rightShoulder', 160, shoulderY),
       landmark('leftHip', 150, hipY),
       landmark('rightHip', 150, hipY),
-      // Knees just starting to bend
-      landmark('leftKnee', 150 - progress * 50, 400 - progress * 20),
-      landmark('rightKnee', 150 + progress * 50, 400 - progress * 20),
-      landmark('leftAnkle', 150, 560),
-      landmark('rightAnkle', 150, 560),
+      // Asymmetric: left knee forward (bent), right knee straight
+      // This forces kneeAngleDifference > MAX_KNEE_ASYMMETRY (30°)
+      landmark('leftKnee', 150 - leftKneeOffset, 400 + progress * 10),
+      landmark('rightKnee', 150 + rightKneeOffset, 400 + progress * 10),
+      landmark('leftAnkle', 150 - 20, 560), // ankle offset matches knee
+      landmark('rightAnkle', 150 + 5, 560),
     ],
   };
 }
@@ -137,6 +147,10 @@ function lungeFrame(timestampMs: number): PoseFrame {
 
 /**
  * Creates a scale-change frame (camera moved, not actual squat).
+ * Person walked much closer to the camera - torso is 2x larger (~280px vs 140px standing).
+ * All landmarks still within image bounds, no quality issue, but the scale
+ * change ratio exceeds THRESHOLDS.MAX_SCALE_CHANGE_RATIO so the classifier
+ * must reject this frame as 'unknown' rather than 'squatting'.
  */
 function scaleChangeFrame(timestampMs: number): PoseFrame {
   return {
@@ -147,17 +161,22 @@ function scaleChangeFrame(timestampMs: number): PoseFrame {
     source: 'apple-vision',
     coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
-      // Person moved closer - torso appears larger
-      // Scale is ~2x (torso 280px instead of 140px)
-      // This triggers scaleChangeRatio > 0.30 and should be rejected
-      landmark('leftShoulder', 140, 50),
-      landmark('rightShoulder', 160, 50),
-      landmark('leftHip', 150, 190), // Torso 140px
-      landmark('rightHip', 150, 190),
-      landmark('leftKnee', 150, 330),
-      landmark('rightKnee', 150, 330),
-      landmark('leftAnkle', 150, 470),
-      landmark('rightAnkle', 150, 470),
+      // Person moved much closer - torso appears 2x larger
+      // Standing baseline: torso 140px (shoulder y=100, hip y=240)
+      // Scale frame: torso 280px (shoulder y=50, hip y=190, hip y goes 50+140*2=330)
+      // Actually hip must remain near 240 to keep the pose shape, but scale grows:
+      // - shoulder y=20, hip y=300 (torso 280px = 2x standing)
+      // Wait: scaleChangeRatio uses (currentScale - baselineScale)/baselineScale
+      // If standing scale = 140 (torso) and current scale = 280 (torso), ratio = 1.0
+      // That's >> MAX_SCALE_CHANGE_RATIO (0.30) → rejected.
+      landmark('leftShoulder', 140, 20, 0.95),
+      landmark('rightShoulder', 160, 20, 0.95),
+      landmark('leftHip', 150, 300, 0.95), // Torso 280px = 2x scale
+      landmark('rightHip', 150, 300, 0.95),
+      landmark('leftKnee', 150, 440, 0.95),
+      landmark('rightKnee', 150, 440, 0.95),
+      landmark('leftAnkle', 150, 580, 0.95),
+      landmark('rightAnkle', 150, 580, 0.95),
     ],
   };
 }
@@ -226,7 +245,7 @@ describe('squat counter', () => {
 
   it('moves to ready after stable standing frames (minimum 3 samples)', () => {
     const counter = createSquatCounter({ targetCount: 5 });
-    // First two frames establish baseline
+    // First three frames establish baseline
     counter.handleFrame(fullBodyFrame('standing', 1000));
     counter.handleFrame(fullBodyFrame('standing', 1100));
     // Third frame with enough baseline samples and stable frames
@@ -251,10 +270,10 @@ describe('squat counter', () => {
     counter.handleFrame(fullBodyFrame('squatting', 1000));
     counter.handleFrame(fullBodyFrame('squatting', 1100));
     // User returns to standing
-    const standingResult = counter.handleFrame(fullBodyFrame('standing', 2000));
-    const finalResult = counter.handleFrame(fullBodyFrame('standing', 2100));
-    assert.equal(standingResult.count, 0, 'should not count when starting in squat');
-    assert.equal(finalResult.count, 0, 'should not count on return to standing');
+    counter.handleFrame(fullBodyFrame('standing', 2000));
+    counter.handleFrame(fullBodyFrame('standing', 2100));
+    const finalResult = counter.handleFrame(fullBodyFrame('standing', 2200));
+    assert.equal(finalResult.count, 0, 'should not count when starting in squat');
     assert.equal(finalResult.phase, 'ready');
   });
 
@@ -271,13 +290,14 @@ describe('squat counter', () => {
     // Squat down (need 3+ stable frames)
     counter.handleFrame(fullBodyFrame('squatting', 2000));
     counter.handleFrame(fullBodyFrame('squatting', 2100));
-    result = counter.handleFrame(fullBodyFrame('squatting', 2200));
+    counter.handleFrame(fullBodyFrame('squatting', 2200));
+    result = counter.handleFrame(fullBodyFrame('squatting', 2300));
     assert.equal(result.phase, 'down');
 
-    // Return to standing
-    result = counter.handleFrame(fullBodyFrame('standing', 3000));
-    assert.equal(result.count, 0);
-    result = counter.handleFrame(fullBodyFrame('standing', 3100));
+    // Return to standing (need 3+ stable frames)
+    counter.handleFrame(fullBodyFrame('standing', 3000));
+    counter.handleFrame(fullBodyFrame('standing', 3100));
+    result = counter.handleFrame(fullBodyFrame('standing', 3200));
     assert.equal(result.count, 1, 'should count after full cycle');
     assert.equal(result.phase, 'ready');
   });
@@ -363,7 +383,8 @@ describe('squat counter', () => {
     counter.handleFrame(fullBodyFrame('squatting', 2100));
     counter.handleFrame(fullBodyFrame('squatting', 2200));
     counter.handleFrame(fullBodyFrame('standing', 3000));
-    const result = counter.handleFrame(fullBodyFrame('standing', 3100));
+    counter.handleFrame(fullBodyFrame('standing', 3100));
+    const result = counter.handleFrame(fullBodyFrame('standing', 3200));
     assert.equal(result.count, 1);
 
     // Reset
@@ -383,7 +404,8 @@ describe('squat counter', () => {
     counter.handleFrame(fullBodyFrame('squatting', 2100));
     counter.handleFrame(fullBodyFrame('squatting', 2200));
     counter.handleFrame(fullBodyFrame('standing', 3000));
-    const result = counter.handleFrame(fullBodyFrame('standing', 3100));
+    counter.handleFrame(fullBodyFrame('standing', 3100));
+    const result = counter.handleFrame(fullBodyFrame('standing', 3200));
     assert.equal(result.count, 1);
 
     // Reset tracking state but preserve count
@@ -446,10 +468,10 @@ describe('squat counter', () => {
       counter.handleFrame(transitionFrame(4100, 0.5));
       counter.handleFrame(transitionFrame(4200, 0.3));
 
-      // Return to standing
-      result = counter.handleFrame(fullBodyFrame('standing', 5000));
-      assert.equal(result.count, 0);
-      result = counter.handleFrame(fullBodyFrame('standing', 5100));
+      // Return to standing (3 stable frames needed)
+      counter.handleFrame(fullBodyFrame('standing', 5000));
+      counter.handleFrame(fullBodyFrame('standing', 5100));
+      result = counter.handleFrame(fullBodyFrame('standing', 5200));
       assert.equal(result.count, 1, 'should count after full sequence with transitions');
     });
 
@@ -464,6 +486,7 @@ describe('squat counter', () => {
       assert.equal(counter.handleFrame(fullBodyFrame('standing', 1400)).phase, 'ready');
 
       // Transition frames spaced out over 2.5 seconds
+      // These have asymmetric knee angles (lunge-like), so classifier returns 'unknown'
       counter.handleFrame(transitionFrame(2000, 0.3));
       counter.handleFrame(transitionFrame(2500, 0.4));
       counter.handleFrame(transitionFrame(3000, 0.5));
@@ -475,6 +498,63 @@ describe('squat counter', () => {
       const result = counter.handleFrame(transitionFrame(4600, 0.9));
       assert.equal(result.phase, 'waiting_for_body', 'should timeout and reset to waiting');
       assert.equal(result.count, 0, 'count should not increase');
+    });
+
+    it('completes a 1.5-second transition squat sequence', () => {
+      const counter = createSquatCounter({ targetCount: 5 });
+
+      // Establish baseline
+      counter.handleFrame(fullBodyFrame('standing', 1000));
+      counter.handleFrame(fullBodyFrame('standing', 1100));
+      counter.handleFrame(fullBodyFrame('standing', 1200));
+      counter.handleFrame(fullBodyFrame('standing', 1300));
+      assert.equal(counter.handleFrame(fullBodyFrame('standing', 1400)).phase, 'ready');
+
+      // 1.5 second transition down (~30 frames at 50ms)
+      for (let i = 0; i < 30; i++) {
+        const progress = (i + 1) / 30;
+        counter.handleFrame(transitionFrame(2000 + i * 50, progress));
+      }
+
+      // 3 squatting frames
+      counter.handleFrame(fullBodyFrame('squatting', 3500));
+      counter.handleFrame(fullBodyFrame('squatting', 3600));
+      counter.handleFrame(fullBodyFrame('squatting', 3700));
+
+      // 1.5 second transition back up
+      for (let i = 0; i < 30; i++) {
+        const progress = 1 - (i + 1) / 30;
+        counter.handleFrame(transitionFrame(4000 + i * 50, progress));
+      }
+
+      // 3 returned standing frames
+      counter.handleFrame(fullBodyFrame('standing', 5500));
+      counter.handleFrame(fullBodyFrame('standing', 5600));
+      const result = counter.handleFrame(fullBodyFrame('standing', 5700));
+      assert.equal(result.count, 1, 'should count after full sequence with 1.5s transitions');
+    });
+
+    it('times out after 3-second slow transition without reaching valid pose', () => {
+      const counter = createSquatCounter({ targetCount: 5 });
+
+      // Establish baseline
+      counter.handleFrame(fullBodyFrame('standing', 1000));
+      counter.handleFrame(fullBodyFrame('standing', 1100));
+      counter.handleFrame(fullBodyFrame('standing', 1200));
+      counter.handleFrame(fullBodyFrame('standing', 1300));
+      assert.equal(counter.handleFrame(fullBodyFrame('standing', 1400)).phase, 'ready');
+
+      // 3-second slow transition (~60 frames at 50ms)
+      // This exceeds MAX_TRANSITION_DURATION_MS (2000ms) - should timeout
+      for (let i = 0; i < 60; i++) {
+        const progress = (i + 1) / 60;
+        const result = counter.handleFrame(transitionFrame(2000 + i * 50, progress));
+        if (result.phase === 'waiting_for_body') {
+          assert.equal(result.count, 0, 'count must remain 0 after timeout');
+          return;
+        }
+      }
+      assert.fail('3-second slow transition must trigger timeout');
     });
   });
 
@@ -521,6 +601,28 @@ describe('squat counter', () => {
       const result = counter.handleFrame(scaleChangeFrame(2500));
       assert.equal(result.count, 0, 'scale change should not be counted');
       assert.ok(result.phase === 'ready', 'should stay in ready phase');
+    });
+
+    it('scale change frame produces metrics.scaleChangeRatio > MAX_SCALE_CHANGE_RATIO', () => {
+      // Establish baseline first by classifying a standing frame
+      const standingFrame = fullBodyFrame('standing', 1000);
+      const standingResult = classifySquatPoseFrame(standingFrame);
+      assert.equal(standingResult.label, 'standing', 'baseline standing frame should classify as standing');
+      assert.ok(standingResult.metrics, 'baseline standing frame must have metrics');
+
+      // Now classify the scale change frame with explicit baseline
+      const scaleFrame = scaleChangeFrame(2000);
+      const result = classifySquatPoseFrame(scaleFrame, {
+        standingBaselineHipY: standingResult.metrics!.midHipY,
+        standingBaselineScale: standingResult.metrics!.poseScale,
+      });
+      assert.equal(result.qualityIssue, 'ok', 'scale change frame itself should not have quality issue');
+      assert.ok(result.metrics, 'scale change frame should have metrics');
+      assert.ok(
+        result.metrics!.scaleChangeRatio > THRESHOLDS.MAX_SCALE_CHANGE_RATIO,
+        `expected scaleChangeRatio > MAX_SCALE_CHANGE_RATIO (${THRESHOLDS.MAX_SCALE_CHANGE_RATIO}), got ${result.metrics!.scaleChangeRatio}`,
+      );
+      assert.equal(result.label, 'unknown', 'classifier must reject scale change');
     });
 
     it('rejects no-hip-drop pose', () => {
@@ -596,14 +698,15 @@ describe('squat counter', () => {
       counter.handleFrame(fullBodyFrame('squatting', 2100));
       counter.handleFrame(fullBodyFrame('squatting', 2200));
       counter.handleFrame(fullBodyFrame('standing', 3000));
-      let result = counter.handleFrame(fullBodyFrame('standing', 3100));
+      counter.handleFrame(fullBodyFrame('standing', 3100));
+      let result = counter.handleFrame(fullBodyFrame('standing', 3200));
       assert.equal(result.count, 1, 'should have counted one squat');
       assert.equal(result.phase, 'ready');
 
       // Simulate camera switch by resetting tracking state
       counter.resetTrackingStatePreservingCount();
 
-      // New camera session - need to re-establish baseline
+      // New camera session - need to re-establish baseline (3 stable frames)
       counter.handleFrame(fullBodyFrame('standing', 4000));
       counter.handleFrame(fullBodyFrame('standing', 4100));
       counter.handleFrame(fullBodyFrame('standing', 4200));

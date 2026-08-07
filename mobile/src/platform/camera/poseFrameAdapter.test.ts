@@ -9,6 +9,9 @@ describe('native pose frame adapter', () => {
       timestampMs: 1234,
       imageWidth: 640,
       imageHeight: 480,
+      cameraFacing: 'front',
+      source: 'apple-vision',
+      coordinateSpace: 'upright-top-left-unmirrored',
       landmarks: [
         { name: 'LEFT_SHOULDER', x: 10, y: 20, confidence: 0.9 },
         { name: 'left_elbow', x: 30, y: 40, confidence: 0.8 },
@@ -24,6 +27,9 @@ describe('native pose frame adapter', () => {
       timestampMs: 1234,
       imageWidth: 640,
       imageHeight: 480,
+      cameraFacing: 'front',
+      source: 'apple-vision',
+      coordinateSpace: 'upright-top-left-unmirrored',
       landmarks: [
         { name: 'leftShoulder', x: 10, y: 20, confidence: 0.9 },
         { name: 'leftElbow', x: 30, y: 40, confidence: 0.8 },
@@ -39,6 +45,9 @@ describe('native pose frame adapter', () => {
     assert.equal(
       nativePoseEventToFrame({
         timestampMs: 1234,
+        cameraFacing: 'front',
+        source: 'apple-vision',
+        coordinateSpace: 'upright-top-left-unmirrored',
         landmarks: [
           { name: 'LEFT_SHOULDER', x: Number.NaN, y: 20, confidence: 0.9 },
           { name: 'nose', x: 1, y: 2, confidence: 0.9 },
