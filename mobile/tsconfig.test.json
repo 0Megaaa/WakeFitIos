@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "react-native": ["./scripts/react-native-stub.ts"]
+    }
+  },
+  "include": ["App.tsx", "src/**/*.ts", "src/**/*.tsx", "modules/**/*.ts", "modules/**/*.tsx", "scripts/react-native-stub.ts"]
+}

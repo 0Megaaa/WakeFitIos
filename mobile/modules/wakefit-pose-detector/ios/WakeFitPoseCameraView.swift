@@ -366,8 +366,8 @@ public final class WakeFitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
 
         self.overlayView.updatePose(
           points: points,
-          imageWidth: imageWidth,
-          imageHeight: imageHeight,
+          imageWidth: CGFloat(imageWidth),
+          imageHeight: CGFloat(imageHeight),
           isMirrored: isMirrored
         )
 
