@@ -95,6 +95,12 @@ function squatFrame(
 }
 
 function driveOneStablePushUp(flow: ReturnType<typeof createChallengeFlow>) {
+  // Calibration: 4 stable frames in plank position
+  flow.handlePoseFrame(pushUpFrame('up', 500));
+  flow.handlePoseFrame(pushUpFrame('up', 600));
+  flow.handlePoseFrame(pushUpFrame('up', 700));
+  flow.handlePoseFrame(pushUpFrame('up', 800));
+  // Push-up motion
   flow.handlePoseFrame(pushUpFrame('up', 1000));
   flow.handlePoseFrame(pushUpFrame('up', 1100));
   flow.handlePoseFrame(pushUpFrame('down', 2000));
