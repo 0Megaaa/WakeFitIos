@@ -1652,3 +1652,239 @@ describe('V1.8.3 Left SIDE calibration with different right arm (baseline test)'
     assert.equal(countResult.count, 1, 'Should count 1 rep');
   });
 });
+
+// ============================================================
+// V1.8.4 SIDE LOCKED SIDE TESTS
+// ============================================================
+
+/**
+ * Create a TRUE RIGHT SIDE calibration frame (left arm exists but is not a SIDE candidate).
+ * Left arm has higher confidence but cannot SIDE because no left hip.
+ * Right arm is the true SIDE candidate with horizontal hip.
+ */
+function createTrueRightSideCalibrationFrame(
+  leftArmConfidence: number,
+  rightArmConfidence: number,
+  rightElbowAngle: number,
+  timestampMs: number,
+): PoseFrame {
+  const rightWrist = calculateWristForAngle(300, 50, 300, 200, rightElbowAngle);
+
+  // Left arm with higher confidence but NOT SIDE (no left hip)
+  const leftWrist = calculateWristForAngle(100, 50, 100, 200, 130); // 130° - not straight
+
+  const rightHipX = 300 + 60;  // Horizontal offset
+  const rightHipY = 50;         // Same y-level as shoulder
+
+  return appleVisionFrame([
+    // Left arm (higher confidence, but no left hip - cannot SIDE)
+    { name: 'leftShoulder', x: 100, y: 50, confidence: leftArmConfidence },
+    { name: 'leftElbow', x: 100, y: 200, confidence: leftArmConfidence },
+    { name: 'leftWrist', x: leftWrist.x, y: leftWrist.y, confidence: leftArmConfidence },
+    // Left hip MISSING
+
+    // Right arm (SIDE candidate)
+    { name: 'rightShoulder', x: 300, y: 50, confidence: rightArmConfidence },
+    { name: 'rightElbow', x: 300, y: 200, confidence: rightArmConfidence },
+    { name: 'rightWrist', x: rightWrist.x, y: rightWrist.y, confidence: rightArmConfidence },
+    { name: 'rightHip', x: rightHipX, y: rightHipY, confidence: 0.36 },
+    { name: 'rightKnee', x: rightHipX + 60, y: 55, confidence: 0.36 },
+    { name: 'rightAnkle', x: rightHipX + 120, y: 60, confidence: 0.36 },
+  ], timestampMs);
+}
+
+describe('V1.8.4 True Right SIDE calibration with left arm higher confidence', () => {
+  it('RIGHT SIDE should calibrate even with higher confidence left arm (no left hip)', () => {
+    const counter = createPushUpCounter();
+
+    // Calibrate: Left arm confidence 0.99, Right arm confidence 0.90
+    // Only Right can SIDE (has hip with horizontal body)
+    for (let i = 0; i < 4; i++) {
+      counter.handleFrame(
+        createTrueRightSideCalibrationFrame(0.99, 0.90, 172, 1000 + i * 100)
+      );
+    }
+
+    const readyResult = counter.handleFrame(
+      createTrueRightSideCalibrationFrame(0.99, 0.90, 172, 1400)
+    );
+    assert.equal(readyResult.phase, 'ready', 'Should be ready after RIGHT SIDE calibration');
+  });
+
+  it('RIGHT SIDE calibration with Right baseline 172, 142 relative DOWN should work', () => {
+    const counter = createPushUpCounter();
+
+    // Calibrate
+    for (let i = 0; i < 4; i++) {
+      counter.handleFrame(
+        createTrueRightSideCalibrationFrame(0.99, 0.90, 172, 1000 + i * 100)
+      );
+    }
+    counter.handleFrame(createTrueRightSideCalibrationFrame(0.99, 0.90, 172, 1400));
+    assert.equal(counter.handleFrame(createTrueRightSideCalibrationFrame(0.99, 0.90, 172, 1450)).phase, 'ready');
+
+    // Push-up with Right arm only
+    function createRightArmFrame(position: number, conf: number, ts: number): PoseFrame {
+      const wrist = calculateWristForAngle(300, 50, 300, 200, position);
+      return appleVisionFrame([
+        { name: 'rightShoulder', x: 300, y: 50, confidence: conf },
+        { name: 'rightElbow', x: 300, y: 200, confidence: conf },
+        { name: 'rightWrist', x: wrist.x, y: wrist.y, confidence: conf },
+      ], ts);
+    }
+
+    // 142°: baseline 172 - 142 = 30 >= 25, 142 <= 145
+    counter.handleFrame(createRightArmFrame(142, 0.90, 2000));
+    const downResult = counter.handleFrame(createRightArmFrame(142, 0.90, 2100));
+    assert.equal(downResult.phase, 'down', 'Should enter DOWN via relative fallback');
+
+    counter.handleFrame(createRightArmFrame(170, 0.90, 3000));
+    const countResult = counter.handleFrame(createRightArmFrame(170, 0.90, 3100));
+    assert.equal(countResult.count, 1, 'Should count 1 rep');
+  });
+});
+
+describe('V1.8.4 SIDE locked side should NOT switch when calibrated side has low confidence', () => {
+  it('Right calibrated, Right low conf, Left valid should NOT switch side or count', () => {
+    const counter = createPushUpCounter();
+
+    // Calibrate with RIGHT SIDE
+    for (let i = 0; i < 4; i++) {
+      counter.handleFrame(createTrueRightSideCalibrationFrame(0.99, 0.90, 172, 1000 + i * 100));
+    }
+    counter.handleFrame(createTrueRightSideCalibrationFrame(0.99, 0.90, 172, 1400));
+    assert.equal(counter.handleFrame(createTrueRightSideCalibrationFrame(0.99, 0.90, 172, 1450)).phase, 'ready');
+
+    // Create frames where Right arm has low confidence, Left arm is valid with bent angle
+    function createSwitchAttemptFrame(
+      rightConf: number,
+      leftConf: number,
+      leftAngle: number,
+      ts: number
+    ): PoseFrame {
+      const leftWrist = calculateWristForAngle(100, 50, 100, 200, leftAngle);
+
+      return appleVisionFrame([
+        // Left arm valid but cannot SIDE (no hip)
+        { name: 'leftShoulder', x: 100, y: 50, confidence: leftConf },
+        { name: 'leftElbow', x: 100, y: 200, confidence: leftConf },
+        { name: 'leftWrist', x: leftWrist.x, y: leftWrist.y, confidence: leftConf },
+        // Right arm low confidence - should NOT switch to this
+        { name: 'rightShoulder', x: 300, y: 50, confidence: rightConf },
+        { name: 'rightElbow', x: 300, y: 200, confidence: rightConf },
+        { name: 'rightWrist', x: 300, y: 350, confidence: rightConf },
+      ], ts);
+    }
+
+    // 500ms of Right low conf, Left valid with 142° (relative DOWN angle)
+    // This should NOT trigger DOWN because it uses Left angle with Right baseline
+    for (let i = 0; i < 5; i++) {
+      const result = counter.handleFrame(
+        createSwitchAttemptFrame(0.20, 0.95, 142, 2000 + i * 100)
+      );
+      assert.equal(result.count, 0, `Frame ${i + 1}: should NOT count with Left arm`);
+      assert.notEqual(result.phase, 'down', `Frame ${i + 1}: should NOT enter down from Left arm`);
+    }
+
+    // Right arm recovers
+    function createRightArmFrame(position: number, conf: number, ts: number): PoseFrame {
+      const wrist = calculateWristForAngle(300, 50, 300, 200, position);
+      return appleVisionFrame([
+        { name: 'rightShoulder', x: 300, y: 50, confidence: conf },
+        { name: 'rightElbow', x: 300, y: 200, confidence: conf },
+        { name: 'rightWrist', x: wrist.x, y: wrist.y, confidence: conf },
+      ], ts);
+    }
+
+    counter.handleFrame(createRightArmFrame(142, 0.90, 2600));
+    const downResult = counter.handleFrame(createRightArmFrame(142, 0.90, 2700));
+    assert.equal(downResult.phase, 'down', 'Right should enter DOWN after recovery');
+
+    counter.handleFrame(createRightArmFrame(170, 0.90, 3000));
+    const countResult = counter.handleFrame(createRightArmFrame(170, 0.90, 3100));
+    assert.equal(countResult.count, 1, 'Should count 1 rep after Right recovery');
+  });
+});
+
+describe('V1.8.4 SIDE >1500ms calibrated side loss should reset calibration', () => {
+  it('Right calibrated, Right invalid >1500ms, Left valid should reset calibration', () => {
+    const counter = createPushUpCounter();
+
+    // Calibrate with RIGHT SIDE
+    for (let i = 0; i < 4; i++) {
+      counter.handleFrame(createTrueRightSideCalibrationFrame(0.99, 0.90, 172, 1000 + i * 100));
+    }
+    counter.handleFrame(createTrueRightSideCalibrationFrame(0.99, 0.90, 172, 1400));
+    assert.equal(counter.handleFrame(createTrueRightSideCalibrationFrame(0.99, 0.90, 172, 1450)).phase, 'ready');
+
+    // Complete one rep first
+    function createRightArmFrame(position: number, conf: number, ts: number): PoseFrame {
+      const wrist = calculateWristForAngle(300, 50, 300, 200, position);
+      return appleVisionFrame([
+        { name: 'rightShoulder', x: 300, y: 50, confidence: conf },
+        { name: 'rightElbow', x: 300, y: 200, confidence: conf },
+        { name: 'rightWrist', x: wrist.x, y: wrist.y, confidence: conf },
+      ], ts);
+    }
+
+    // DOWN
+    counter.handleFrame(createRightArmFrame(142, 0.90, 2000));
+    counter.handleFrame(createRightArmFrame(142, 0.90, 2100));
+    // UP
+    counter.handleFrame(createRightArmFrame(170, 0.90, 3000));
+    const afterRep = counter.handleFrame(createRightArmFrame(170, 0.90, 3100));
+    assert.equal(afterRep.count, 1, 'Should have counted 1 rep');
+
+    // Right arm loss for >1500ms with Left arm always valid
+    function createRightLostFrame(leftConf: number, ts: number): PoseFrame {
+      const leftWrist = calculateWristForAngle(100, 50, 100, 200, 170);
+      return appleVisionFrame([
+        // Left arm always valid
+        { name: 'leftShoulder', x: 100, y: 50, confidence: leftConf },
+        { name: 'leftElbow', x: 100, y: 200, confidence: leftConf },
+        { name: 'leftWrist', x: leftWrist.x, y: leftWrist.y, confidence: leftConf },
+        // Right arm MISSING
+      ], ts);
+    }
+
+    // 1600ms of Right missing, Left always valid
+    counter.handleFrame(createRightLostFrame(0.95, 3200));
+    counter.handleFrame(createRightLostFrame(0.95, 3800)); // 600ms
+    counter.handleFrame(createRightLostFrame(0.95, 4400)); // 1200ms
+    const afterLoss = counter.handleFrame(createRightLostFrame(0.95, 4800)); // 1600ms total
+
+    assert.equal(afterLoss.phase, 'waiting_for_body', 'Should reset to waiting_for_body after >1500ms loss');
+    assert.equal(afterLoss.count, 1, 'Should preserve count');
+  });
+});
+
+describe('V1.8.4 FRONT should allow dynamic side switching', () => {
+  it('FRONT calibration should allow switching between arms', () => {
+    const counter = createPushUpCounter();
+
+    // Calibrate with dual arms FRONT
+    for (let i = 0; i < 4; i++) {
+      counter.handleFrame(createFrontCalibrationFrame(172, 0.95, 1000 + i * 100));
+    }
+    assert.equal(counter.handleFrame(createFrontCalibrationFrame(172, 0.95, 1400)).phase, 'ready');
+
+    // Now switch to using only right arm (lower confidence)
+    function createRightOnlyFrame(position: number, conf: number, ts: number): PoseFrame {
+      const wrist = calculateWristForAngle(200, 50, 200, 200, position);
+      return appleVisionFrame([
+        { name: 'rightShoulder', x: 200, y: 50, confidence: conf },
+        { name: 'rightElbow', x: 200, y: 200, confidence: conf },
+        { name: 'rightWrist', x: wrist.x, y: wrist.y, confidence: conf },
+      ], ts);
+    }
+
+    // Should still work with right arm only (dynamic side selection)
+    counter.handleFrame(createRightOnlyFrame(85, 0.95, 2000)); // down angle
+    const downResult = counter.handleFrame(createRightOnlyFrame(85, 0.95, 2100));
+    assert.equal(downResult.phase, 'down', 'Should enter down with right arm only');
+
+    counter.handleFrame(createRightOnlyFrame(170, 0.95, 3000)); // up angle
+    const countResult = counter.handleFrame(createRightOnlyFrame(170, 0.95, 3100));
+    assert.equal(countResult.count, 1, 'Should count with dynamic right arm');
+  });
+});

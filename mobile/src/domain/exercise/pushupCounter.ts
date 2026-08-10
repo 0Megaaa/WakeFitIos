@@ -88,6 +88,7 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
   let calibrationCandidateSide: 'left' | 'right' | null = null; // V1.8.2: track which side
   let calibrationFrames = 0;
   let calibrationMissFrames = 0; // V1.8.1: 1-frame miss tolerance
+  let calibratedSide: 'left' | 'right' | null = null; // V1.8.4: locked side for SIDE calibration
   let standingRejectFrames = 0;
 
   function isAppleVision(frame: PoseFrame): boolean {
@@ -495,6 +496,7 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
     calibrationMode = null;
     calibrationCandidate = null;
     calibrationCandidateSide = null;
+    calibratedSide = null;
     calibrationFrames = 0;
     calibrationMissFrames = 0;
     standingRejectFrames = 0;
@@ -739,7 +741,22 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
       }
 
       // Track arm validity
-      const side = getBestConfidentSide(frame, minConfidence);
+      // V1.8.4: For SIDE calibration, lock to calibratedSide instead of dynamic selection
+      let side: { side: 'left' | 'right'; shoulder: { x: number; y: number; confidence: number }; elbow: { x: number; y: number; confidence: number }; wrist: { x: number; y: number; confidence: number } } | null = null;
+
+      if (calibrationMode === 'side' && calibratedSide !== null) {
+        // SIDE calibrated: use locked side only
+        const calibratedArm = getSideLandmarks(frame, calibratedSide);
+        if (calibratedArm) {
+          side = { side: calibratedSide, ...calibratedArm };
+          // Update appleVisionActiveSide to match calibratedSide
+          appleVisionActiveSide = calibratedSide;
+        }
+        // If calibratedSide arm is invalid, side remains null (grace period will handle this)
+      } else {
+        // FRONT or not calibrated: use getBestConfidentSide for dynamic selection
+        side = getBestConfidentSide(frame, minConfidence);
+      }
 
       if (side) {
         lastValidArmTimestampMs = frame.timestampMs;
@@ -818,13 +835,16 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
               phase = 'ready';
 
               // V1.8.3: For SIDE, use the side that actually passed SIDE calibration
-              // NOT the side from getBestConfidentSide which may be different
+              // V1.8.4: Lock this side for the duration of SIDE calibration
               if (candidate === 'side' && sideCandidate !== null) {
+                calibratedSide = sideCandidate;
                 appleVisionActiveSide = sideCandidate;
+              } else {
+                // FRONT: clear calibratedSide
+                calibratedSide = null;
               }
 
               // V1.8.3: Establish baseline from the correct side
-              // SIDE: use sideCandidate arm; FRONT: use side (getBestConfidentSide result)
               const baselineArm = (candidate === 'side' && sideCandidate !== null)
                 ? getSideLandmarks(frame, sideCandidate)
                 : side;
@@ -864,17 +884,10 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
       }
 
       // ===== CALIBRATED - NORMAL COUNTING LOGIC =====
-      // V1.8.3: Use the calibrated side if available, otherwise use getBestConfidentSide result
-      let activeSide = side;
-      if (calibrationMode === 'side' && appleVisionActiveSide !== null) {
-        const calibratedArm = getSideLandmarks(frame, appleVisionActiveSide);
-        if (calibratedArm) {
-          activeSide = { side: appleVisionActiveSide, ...calibratedArm };
-        }
-      }
-
-      // Calculate elbow angle from the correct side
-      lastElbowAngle = calculateAngle(activeSide.shoulder, activeSide.elbow, activeSide.wrist);
+      // V1.8.4: For SIDE, side is already from calibratedSide
+      // For FRONT, side is from getBestConfidentSide
+      // Calculate elbow angle
+      lastElbowAngle = calculateAngle(side.shoulder, side.elbow, side.wrist);
 
       // Classify pose
       let observedPose: 'up' | 'down' | null;
