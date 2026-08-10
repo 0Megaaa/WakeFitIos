@@ -7,6 +7,7 @@ import type {
   PushUpCounterOptions,
   PushUpCounterResult,
   SquatCounterOptions,
+  PoseLandmarkName,
 } from './types.ts';
 
 export type { PoseLandmarkName, Point, PoseLandmark, PoseFrame, PushUpPhase } from './types.ts';
@@ -28,6 +29,15 @@ const APPLE_VISION_INVALID_DURATION_THRESHOLD_MS = 1500;
 // Apple Vision requires only 2 stable frames for squat detection
 const APPLE_VISION_SQUAT_MIN_STABLE_FRAMES = 2;
 
+// Apple Vision Push-up relaxed defaults
+const APPLE_VISION_PUSHUP_MIN_CONFIDENCE = 0.35;
+const APPLE_VISION_PUSHUP_DOWN_ANGLE = 135;
+const APPLE_VISION_PUSHUP_UP_ANGLE = 150;
+
+// Relative elbow fallback thresholds for Apple Vision
+const APPLE_VISION_RELATIVE_DOWN_DELTA = 25;
+const APPLE_VISION_RELATIVE_DOWN_MAX_ANGLE = 145;
+
 export function calculateAngle(a: { x: number; y: number }, vertex: { x: number; y: number }, c: { x: number; y: number }): number {
   const ab = { x: a.x - vertex.x, y: a.y - vertex.y };
   const cb = { x: c.x - vertex.x, y: c.y - vertex.y };
@@ -41,9 +51,12 @@ export function calculateAngle(a: { x: number; y: number }, vertex: { x: number;
 
 export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpCounter {
   const targetCount = normalizeTargetCount(options.targetCount);
-  const minConfidence = options.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
-  const downAngle = options.downAngle ?? 90;
-  const upAngle = options.upAngle ?? 160;
+
+  // Store explicit config to distinguish from defaults
+  const configuredMinConfidence = options.minConfidence;
+  const configuredDownAngle = options.downAngle;
+  const configuredUpAngle = options.upAngle;
+
   const minStableFrames = Math.max(1, Math.trunc(options.minStableFrames ?? DEFAULT_MIN_STABLE_FRAMES));
 
   let count = 0;
@@ -51,6 +64,63 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
   let lastElbowAngle: number | null = null;
   let candidatePose: 'up' | 'down' | null = null;
   let candidateFrames = 0;
+
+  // Apple Vision specific state
+  let appleVisionUpBaselineAngle: number | null = null;
+  let appleVisionBaselineFrames = 0;
+  let appleVisionActiveSide: 'left' | 'right' | null = null;
+
+  // Grace timeout for temporary arm loss
+  let lastValidArmTimestampMs: number | null = null;
+  let invalidStartTimestampMs: number | null = null;
+
+  function isAppleVision(frame: PoseFrame): boolean {
+    return frame.source === 'apple-vision';
+  }
+
+  /**
+   * Get effective minimum confidence for the frame.
+   * Apple Vision uses lower threshold (0.35) for push-up.
+   * Explicit configuration takes priority.
+   */
+  function getEffectiveMinConfidence(frame: PoseFrame): number {
+    if (configuredMinConfidence !== undefined) {
+      return configuredMinConfidence;
+    }
+    return isAppleVision(frame) ? APPLE_VISION_PUSHUP_MIN_CONFIDENCE : DEFAULT_MIN_CONFIDENCE;
+  }
+
+  /**
+   * Get effective down angle for the frame.
+   * Apple Vision uses relaxed threshold (135°) for push-up.
+   * Explicit configuration takes priority.
+   */
+  function getEffectiveDownAngle(frame: PoseFrame): number {
+    if (configuredDownAngle !== undefined) {
+      return configuredDownAngle;
+    }
+    return isAppleVision(frame) ? APPLE_VISION_PUSHUP_DOWN_ANGLE : 90;
+  }
+
+  /**
+   * Get effective up angle for the frame.
+   * Apple Vision uses relaxed threshold (150°) for push-up.
+   * Explicit configuration takes priority.
+   */
+  function getEffectiveUpAngle(frame: PoseFrame): number {
+    if (configuredUpAngle !== undefined) {
+      return configuredUpAngle;
+    }
+    return isAppleVision(frame) ? APPLE_VISION_PUSHUP_UP_ANGLE : 160;
+  }
+
+  /**
+   * Get invalid threshold for the frame.
+   * Apple Vision uses longer timeout (1500ms) for push-up.
+   */
+  function getInvalidThreshold(frame: PoseFrame): number {
+    return isAppleVision(frame) ? APPLE_VISION_INVALID_DURATION_THRESHOLD_MS : INVALID_DURATION_THRESHOLD_MS;
+  }
 
   function currentResult(isPoseReady: boolean): PushUpCounterResult {
     return {
@@ -62,19 +132,304 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
     };
   }
 
+  /**
+   * Check if this side has sufficient arm chain for Apple Vision push-up.
+   * Apple Vision only requires shoulder + elbow + wrist (no hip required).
+   *
+   * For ML Kit, we still require hip for backward compatibility.
+   */
+  function hasValidArmSide(
+    frame: PoseFrame,
+    side: 'left' | 'right',
+    minConfidence: number,
+  ): boolean {
+    const byName = new Map<string, { x: number; y: number; confidence: number }>();
+    for (const item of frame.landmarks) {
+      byName.set(item.name, item);
+    }
+
+    const shoulder = byName.get(`${side}Shoulder`);
+    const elbow = byName.get(`${side}Elbow`);
+    const wrist = byName.get(`${side}Wrist`);
+
+    if (!shoulder || !elbow || !wrist) {
+      return false;
+    }
+
+    if (
+      shoulder.confidence < minConfidence ||
+      elbow.confidence < minConfidence ||
+      wrist.confidence < minConfidence
+    ) {
+      return false;
+    }
+
+    // Apple Vision: only need shoulder + elbow + wrist
+    if (isAppleVision(frame)) {
+      return true;
+    }
+
+    // ML Kit: also require hip for push-up
+    const hip = byName.get(`${side}Hip`);
+    if (!hip || hip.confidence < minConfidence) {
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Get the best confident arm side for the frame.
+   *
+   * Stabilization strategy:
+   * - Once a rep tracking has started, prefer the current active side
+   * - Only switch when the active side becomes unreliable
+   * - This prevents rapid side switching due to confidence fluctuations
+   */
+  function getBestConfidentSide(
+    frame: PoseFrame,
+    minConfidence: number,
+  ): { side: 'left' | 'right'; shoulder: { x: number; y: number; confidence: number }; elbow: { x: number; y: number; confidence: number }; wrist: { x: number; y: number; confidence: number } } | null {
+    const hasLeft = hasValidArmSide(frame, 'left', minConfidence);
+    const hasRight = hasValidArmSide(frame, 'right', minConfidence);
+
+    if (!hasLeft && !hasRight) {
+      return null;
+    }
+
+    // Stabilization: prefer current active side if still valid
+    if (appleVisionActiveSide !== null) {
+      const activeValid = hasValidArmSide(frame, appleVisionActiveSide, minConfidence);
+      if (activeValid) {
+        // Active side is still valid, use it
+        const landmarks = getSideLandmarks(frame, appleVisionActiveSide);
+        if (landmarks) {
+          return { side: appleVisionActiveSide, ...landmarks };
+        }
+      }
+    }
+
+    // Active side not available or not set, select the best available side
+    if (hasLeft && !hasRight) {
+      appleVisionActiveSide = 'left';
+      const landmarks = getSideLandmarks(frame, 'left');
+      if (landmarks) {
+        return { side: 'left', ...landmarks };
+      }
+    }
+
+    if (hasRight && !hasLeft) {
+      appleVisionActiveSide = 'right';
+      const landmarks = getSideLandmarks(frame, 'right');
+      if (landmarks) {
+        return { side: 'right', ...landmarks };
+      }
+    }
+
+    // Both sides available - use the one with higher average confidence
+    if (hasLeft && hasRight) {
+      const leftAvg = getSideAverageConfidence(frame, 'left', minConfidence);
+      const rightAvg = getSideAverageConfidence(frame, 'right', minConfidence);
+      const chosen = leftAvg >= rightAvg ? 'left' : 'right';
+      appleVisionActiveSide = chosen;
+      const landmarks = getSideLandmarks(frame, chosen);
+      if (landmarks) {
+        return { side: chosen, ...landmarks };
+      }
+    }
+
+    return null;
+  }
+
+  function getSideLandmarks(
+    frame: PoseFrame,
+    side: 'left' | 'right',
+  ): { shoulder: { x: number; y: number; confidence: number }; elbow: { x: number; y: number; confidence: number }; wrist: { x: number; y: number; confidence: number } } | null {
+    const byName = new Map<string, { x: number; y: number; confidence: number }>();
+    for (const item of frame.landmarks) {
+      byName.set(item.name, item);
+    }
+
+    const shoulder = byName.get(`${side}Shoulder`);
+    const elbow = byName.get(`${side}Elbow`);
+    const wrist = byName.get(`${side}Wrist`);
+
+    if (!shoulder || !elbow || !wrist) {
+      return null;
+    }
+
+    return { shoulder, elbow, wrist };
+  }
+
+  function getSideAverageConfidence(
+    frame: PoseFrame,
+    side: 'left' | 'right',
+    minConfidence: number,
+  ): number {
+    const byName = new Map<string, { x: number; y: number; confidence: number }>();
+    for (const item of frame.landmarks) {
+      byName.set(item.name, item);
+    }
+
+    const shoulder = byName.get(`${side}Shoulder`);
+    const elbow = byName.get(`${side}Elbow`);
+    const wrist = byName.get(`${side}Wrist`);
+
+    if (!shoulder || !elbow || !wrist) {
+      return 0;
+    }
+
+    if (
+      shoulder.confidence < minConfidence ||
+      elbow.confidence < minConfidence ||
+      wrist.confidence < minConfidence
+    ) {
+      return 0;
+    }
+
+    return (shoulder.confidence + elbow.confidence + wrist.confidence) / 3;
+  }
+
+  /**
+   * Classify elbow pose using absolute and relative thresholds.
+   *
+   * Apple Vision push-up DOWN classification:
+   * 1. absoluteDown: elbowAngle <= absoluteDownAngle (e.g., 135°)
+   * 2. relativeDown: (baselineAngle - elbowAngle) >= relativeDelta (e.g., 25°)
+   *                  AND elbowAngle <= relativeMaxAngle (e.g., 145°)
+   *
+   * This supports front-facing camera where 2D projection may not show
+   * as dramatic angle reduction as side view.
+   */
+  function classifyElbowPoseForAppleVision(
+    angle: number,
+    absoluteDownAngle: number,
+    upAngle: number,
+  ): 'up' | 'down' | null {
+    // First check if clearly UP
+    if (angle >= upAngle) {
+      return 'up';
+    }
+
+    // Check absolute DOWN
+    if (angle <= absoluteDownAngle) {
+      return 'down';
+    }
+
+    // Check relative DOWN fallback for Apple Vision
+    // Only applies when we have a valid baseline
+    if (appleVisionUpBaselineAngle !== null) {
+      const delta = appleVisionUpBaselineAngle - angle;
+      if (delta >= APPLE_VISION_RELATIVE_DOWN_DELTA && angle <= APPLE_VISION_RELATIVE_DOWN_MAX_ANGLE) {
+        return 'down';
+      }
+    }
+
+    // In transition zone - neither up nor down
+    return null;
+  }
+
+  /**
+   * Classify elbow pose using only absolute thresholds (for ML Kit).
+   */
+  function classifyElbowPose(
+    angle: number,
+    downAngle: number,
+    upAngle: number,
+  ): 'up' | 'down' | null {
+    if (angle >= upAngle) return 'up';
+    if (angle < downAngle) return 'down';
+    return null;
+  }
+
   return {
     handleFrame(frame: PoseFrame): PushUpCounterResult {
+      const minConfidence = getEffectiveMinConfidence(frame);
+      const downAngle = getEffectiveDownAngle(frame);
+      const upAngle = getEffectiveUpAngle(frame);
+      const invalidThreshold = getInvalidThreshold(frame);
+      const isAV = isAppleVision(frame);
+
+      // Track last valid arm timestamp for grace timeout
       const side = getBestConfidentSide(frame, minConfidence);
-      if (!side) {
+
+      if (side) {
+        lastValidArmTimestampMs = frame.timestampMs;
+        invalidStartTimestampMs = null;
+      }
+
+      // Check for grace timeout - temporary arm loss
+      if (!side && lastValidArmTimestampMs !== null && invalidStartTimestampMs === null) {
+        invalidStartTimestampMs = frame.timestampMs;
+      }
+
+      // Handle grace timeout
+      if (!side && invalidStartTimestampMs !== null) {
+        const invalidDuration = frame.timestampMs - invalidStartTimestampMs;
+
+        // Within grace period: preserve state but mark not ready
+        if (invalidDuration < invalidThreshold) {
+          // Keep current phase and count, but don't update state
+          // This allows temporary arm loss without resetting
+          return currentResult(false);
+        }
+
+        // Grace period exceeded: full reset tracking
         phase = 'waiting_for_body';
         lastElbowAngle = null;
         candidatePose = null;
         candidateFrames = 0;
+        appleVisionUpBaselineAngle = null;
+        appleVisionBaselineFrames = 0;
+        appleVisionActiveSide = null;
+        invalidStartTimestampMs = null;
+        lastValidArmTimestampMs = null;
         return currentResult(false);
       }
 
+      if (!side) {
+        // No valid arm side detected
+        phase = 'waiting_for_body';
+        lastElbowAngle = null;
+        candidatePose = null;
+        candidateFrames = 0;
+        appleVisionUpBaselineAngle = null;
+        appleVisionBaselineFrames = 0;
+        appleVisionActiveSide = null;
+        return currentResult(false);
+      }
+
+      // Calculate elbow angle
       lastElbowAngle = calculateAngle(side.shoulder, side.elbow, side.wrist);
-      const observedPose = classifyElbowPose(lastElbowAngle, downAngle, upAngle);
+
+      // Classify pose based on source
+      let observedPose: 'up' | 'down' | null;
+      let isRelativeDownFallback = false;
+      if (isAV) {
+        observedPose = classifyElbowPoseForAppleVision(lastElbowAngle, downAngle, upAngle);
+        isRelativeDownFallback = observedPose === 'down' && lastElbowAngle > downAngle;
+
+        // Track UP baseline for relative fallback
+        if (observedPose === 'up') {
+          if (appleVisionUpBaselineAngle === null) {
+            appleVisionUpBaselineAngle = lastElbowAngle;
+            appleVisionBaselineFrames = 1;
+          } else {
+            // Average with existing baseline for stability
+            appleVisionUpBaselineAngle =
+              (appleVisionUpBaselineAngle * appleVisionBaselineFrames + lastElbowAngle) /
+              (appleVisionBaselineFrames + 1);
+            appleVisionBaselineFrames += 1;
+          }
+        }
+        // Note: We only reset baseline when:
+        // 1. Detected absolute DOWN (angle <= downAngle), OR
+        // 2. State machine confirms DOWN state (after stable frames)
+        // We do NOT reset on relative down detection alone, as it needs confirmation
+      } else {
+        observedPose = classifyElbowPose(lastElbowAngle, downAngle, upAngle);
+      }
+
       if (!observedPose) {
         candidatePose = null;
         candidateFrames = 0;
@@ -102,6 +457,9 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
 
       if (phase === 'ready' && observedPose === 'down') {
         phase = 'down';
+        // Reset baseline when DOWN is confirmed - we'll establish new baseline when up again
+        appleVisionUpBaselineAngle = null;
+        appleVisionBaselineFrames = 0;
       }
 
       return currentResult(true);
@@ -113,6 +471,11 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
       lastElbowAngle = null;
       candidatePose = null;
       candidateFrames = 0;
+      appleVisionUpBaselineAngle = null;
+      appleVisionBaselineFrames = 0;
+      appleVisionActiveSide = null;
+      invalidStartTimestampMs = null;
+      lastValidArmTimestampMs = null;
       return currentResult(false);
     },
 
@@ -121,6 +484,11 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
       lastElbowAngle = null;
       candidatePose = null;
       candidateFrames = 0;
+      appleVisionUpBaselineAngle = null;
+      appleVisionBaselineFrames = 0;
+      appleVisionActiveSide = null;
+      invalidStartTimestampMs = null;
+      lastValidArmTimestampMs = null;
       return currentResult(false);
     },
   };
@@ -425,43 +793,4 @@ export function createSquatCounter(options: SquatCounterOptions = {}): PushUpCou
       return currentResult(false);
     },
   };
-}
-
-type RequiredSide = {
-  shoulder: { x: number; y: number; confidence: number };
-  elbow: { x: number; y: number; confidence: number };
-  wrist: { x: number; y: number; confidence: number };
-  hip: { x: number; y: number; confidence: number };
-};
-
-function getBestConfidentSide(frame: PoseFrame, minConfidence: number): RequiredSide | null {
-  const left = getConfidentSide(frame, 'left', minConfidence);
-  const right = getConfidentSide(frame, 'right', minConfidence);
-  if (!left) return right;
-  if (!right) return left;
-  return averageConfidence(right) > averageConfidence(left) ? right : left;
-}
-
-function getConfidentSide(frame: PoseFrame, side: string, minConfidence: number): RequiredSide | null {
-  const byName = new Map<string, { x: number; y: number; confidence: number }>();
-  for (const item of frame.landmarks) {
-    byName.set(item.name, item);
-  }
-  const shoulder = byName.get(`${side}Shoulder`);
-  const elbow = byName.get(`${side}Elbow`);
-  const wrist = byName.get(`${side}Wrist`);
-  const hip = byName.get(`${side}Hip`);
-  if (!shoulder || !elbow || !wrist || !hip) return null;
-  if (shoulder.confidence < minConfidence || elbow.confidence < minConfidence || wrist.confidence < minConfidence || hip.confidence < minConfidence) return null;
-  return { shoulder, elbow, wrist, hip };
-}
-
-function averageConfidence(side: RequiredSide): number {
-  return (side.shoulder.confidence + side.elbow.confidence + side.wrist.confidence + side.hip.confidence) / 4;
-}
-
-function classifyElbowPose(angle: number, downAngle: number, upAngle: number): 'up' | 'down' | null {
-  if (angle >= upAngle) return 'up';
-  if (angle < downAngle) return 'down';
-  return null;
 }
