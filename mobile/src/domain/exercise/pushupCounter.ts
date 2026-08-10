@@ -908,19 +908,21 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
       if (isAV) {
         observedPose = classifyElbowPoseForAppleVision(lastElbowAngle, downAngle, upAngle, side.side);
 
-        // V1.8.5: Track UP baseline with side
+        // V1.8.5.1: Track UP baseline with side, allowing FRONT side-switch to establish new baseline
         if (observedPose === 'up') {
-          if (appleVisionUpBaselineAngle === null) {
-            // First UP frame - establish baseline
+          if (appleVisionUpBaselineAngle === null || appleVisionUpBaselineSide === null) {
+            // Case A: No baseline yet - establish baseline
             appleVisionUpBaselineAngle = lastElbowAngle;
             appleVisionUpBaselineSide = side.side;
           } else if (appleVisionUpBaselineSide === side.side) {
-            // Same side as baseline - only allow baseline to increase (anti-drift)
+            // Case B: Same side as baseline - anti-drift (Math.max)
             appleVisionUpBaselineAngle = Math.max(appleVisionUpBaselineAngle, lastElbowAngle);
           } else {
-            // Side switched - keep original baseline, don't switch to new side's angle
-            // This prevents lower readings on new side from dragging baseline down
-            // The original baseline remains valid for the old side
+            // Case C: Different side - FRONT dynamic side-switch detected
+            // V1.8.5.1: Only establish new baseline if we are at FULL UP (angle >= upAngle)
+            // This is already guaranteed because observedPose === 'up'
+            appleVisionUpBaselineAngle = lastElbowAngle;
+            appleVisionUpBaselineSide = side.side;
           }
         }
       } else {

@@ -1920,3 +1920,201 @@ describe('V1.8.5 FRONT side-switch should not use cross-side baseline', () => {
     }
   });
 });
+
+// ============================================================
+// V1.8.5.1 FRONT SIDE-SWITCH NEW BASELINE TESTS
+// ============================================================
+
+describe('V1.8.5.1 FRONT side-switch should establish new baseline when new side reaches UP', () => {
+  it('FRONT Left baseline 172 → Right 170 UP → Right 142 should trigger relative DOWN', () => {
+    const counter = createPushUpCounter();
+
+    // FRONT dual-arm calibration
+    for (let i = 0; i < 4; i++) {
+      counter.handleFrame(createFrontCalibrationFrame(172, 0.95, 100 + i * 100));
+    }
+    assert.equal(counter.handleFrame(createFrontCalibrationFrame(172, 0.95, 500)).phase, 'ready');
+
+    function createRightOnlyFrame(position: number, conf: number, ts: number): PoseFrame {
+      const wrist = calculateWristForAngle(200, 80, 200, 200, position);
+      return appleVisionFrame([
+        { name: 'rightShoulder', x: 200, y: 80, confidence: conf },
+        { name: 'rightElbow', x: 200, y: 200, confidence: conf },
+        { name: 'rightWrist', x: wrist.x, y: wrist.y, confidence: conf },
+      ], ts);
+    }
+
+    // Right 170 UP to establish new baseline
+    counter.handleFrame(createRightOnlyFrame(170, 0.95, 1000));
+    counter.handleFrame(createRightOnlyFrame(170, 0.95, 1100));
+
+    // Right 142 should trigger relative DOWN with new Right baseline
+    counter.handleFrame(createRightOnlyFrame(142, 0.95, 2000));
+    const downResult = counter.handleFrame(createRightOnlyFrame(142, 0.95, 2100));
+    assert.equal(downResult.phase, 'down', 'Should enter DOWN with new Right baseline');
+
+    // UP to complete rep
+    counter.handleFrame(createRightOnlyFrame(170, 0.95, 3000));
+    const countResult = counter.handleFrame(createRightOnlyFrame(170, 0.95, 3100));
+    assert.equal(countResult.count, 1, 'Should count 1 rep');
+    assert.equal(countResult.phase, 'ready', 'Should return to ready');
+  });
+
+  it('FRONT Right baseline 172 → Left 170 UP → Left 142 should trigger relative DOWN (symmetric)', () => {
+    const counter = createPushUpCounter();
+
+    // FRONT dual-arm calibration - both arms at 172
+    for (let i = 0; i < 4; i++) {
+      counter.handleFrame(createFrontCalibrationFrame(172, 0.95, 100 + i * 100));
+    }
+    assert.equal(counter.handleFrame(createFrontCalibrationFrame(172, 0.95, 500)).phase, 'ready');
+
+    function createLeftOnlyFrame(position: number, conf: number, ts: number): PoseFrame {
+      const wrist = calculateWristForAngle(100, 80, 100, 200, position);
+      return appleVisionFrame([
+        { name: 'leftShoulder', x: 100, y: 80, confidence: conf },
+        { name: 'leftElbow', x: 100, y: 200, confidence: conf },
+        { name: 'leftWrist', x: wrist.x, y: wrist.y, confidence: conf },
+      ], ts);
+    }
+
+    // Force baseline to be RIGHT by using only right arm at 172 first
+    function createRightOnlyFrame(position: number, conf: number, ts: number): PoseFrame {
+      const wrist = calculateWristForAngle(200, 80, 200, 200, position);
+      return appleVisionFrame([
+        { name: 'rightShoulder', x: 200, y: 80, confidence: conf },
+        { name: 'rightElbow', x: 200, y: 200, confidence: conf },
+        { name: 'rightWrist', x: wrist.x, y: wrist.y, confidence: conf },
+      ], ts);
+    }
+
+    // Right 172 to establish Right baseline
+    counter.handleFrame(createRightOnlyFrame(172, 0.95, 1000));
+
+    // Now switch to Left 170 UP - should establish Left baseline
+    counter.handleFrame(createLeftOnlyFrame(170, 0.95, 2000));
+    counter.handleFrame(createLeftOnlyFrame(170, 0.95, 2100));
+
+    // Left 142 should trigger relative DOWN with new Left baseline
+    counter.handleFrame(createLeftOnlyFrame(142, 0.95, 3000));
+    const downResult = counter.handleFrame(createLeftOnlyFrame(142, 0.95, 3100));
+    assert.equal(downResult.phase, 'down', 'Left should enter DOWN with new baseline');
+
+    // UP to complete rep
+    counter.handleFrame(createLeftOnlyFrame(170, 0.95, 4000));
+    const countResult = counter.handleFrame(createLeftOnlyFrame(170, 0.95, 4100));
+    assert.equal(countResult.count, 1, 'Should count 1 rep (symmetric)');
+  });
+});
+
+// ============================================================
+// V1.8.5.1 SIDE LOW CONFIDENCE TESTS
+// ============================================================
+
+describe('V1.8.5.1 SIDE calibrated with low confidence should enter grace', () => {
+  it('SIDE Right calibrated, Right conf 0.20 with valid landmarks, Left conf 0.95: 500ms grace', () => {
+    const counter = createPushUpCounter();
+
+    // Calibrate with RIGHT SIDE
+    for (let i = 0; i < 4; i++) {
+      counter.handleFrame(createTrueRightSideCalibrationFrame(0.99, 0.90, 172, 1000 + i * 100));
+    }
+    counter.handleFrame(createTrueRightSideCalibrationFrame(0.99, 0.90, 172, 1400));
+    assert.equal(counter.handleFrame(createTrueRightSideCalibrationFrame(0.99, 0.90, 172, 1450)).phase, 'ready');
+
+    // Right landmarks exist but confidence is 0.20, geometry is 142° (relative DOWN angle)
+    // Left is always valid at 0.95
+    function createLowConfFrame(ts: number): PoseFrame {
+      const rightWrist = calculateWristForAngle(300, 50, 300, 200, 142);
+      const leftWrist = calculateWristForAngle(100, 50, 100, 200, 170);
+
+      return appleVisionFrame([
+        // Left always valid (no hip)
+        { name: 'leftShoulder', x: 100, y: 50, confidence: 0.95 },
+        { name: 'leftElbow', x: 100, y: 200, confidence: 0.95 },
+        { name: 'leftWrist', x: leftWrist.x, y: leftWrist.y, confidence: 0.95 },
+        // Right landmarks exist but low confidence 0.20
+        { name: 'rightShoulder', x: 300, y: 50, confidence: 0.20 },
+        { name: 'rightElbow', x: 300, y: 200, confidence: 0.20 },
+        { name: 'rightWrist', x: rightWrist.x, y: rightWrist.y, confidence: 0.20 },
+      ], ts);
+    }
+
+    // 500ms of low confidence Right, valid Left
+    for (let i = 0; i < 5; i++) {
+      const result = counter.handleFrame(createLowConfFrame(2000 + i * 100));
+      assert.equal(result.isPoseReady, false, `Frame ${i + 1}: isPoseReady should be false`);
+      assert.equal(result.count, 0, `Frame ${i + 1}: count should be 0`);
+      assert.notEqual(result.phase, 'down', `Frame ${i + 1}: should NOT enter down with low-conf Right`);
+    }
+
+    // Right arm recovers
+    function createRightArmFrame(position: number, conf: number, ts: number): PoseFrame {
+      const wrist = calculateWristForAngle(300, 50, 300, 200, position);
+      return appleVisionFrame([
+        { name: 'rightShoulder', x: 300, y: 50, confidence: conf },
+        { name: 'rightElbow', x: 300, y: 200, confidence: conf },
+        { name: 'rightWrist', x: wrist.x, y: wrist.y, confidence: conf },
+      ], ts);
+    }
+
+    counter.handleFrame(createRightArmFrame(142, 0.90, 2600));
+    const downResult = counter.handleFrame(createRightArmFrame(142, 0.90, 2700));
+    assert.equal(downResult.phase, 'down', 'Right should enter DOWN after recovery');
+
+    counter.handleFrame(createRightArmFrame(170, 0.90, 3000));
+    const countResult = counter.handleFrame(createRightArmFrame(170, 0.90, 3100));
+    assert.equal(countResult.count, 1, 'Should count 1 rep after recovery');
+  });
+
+  it('SIDE Right calibrated, Right conf 0.20 >1500ms: should reset calibration', () => {
+    const counter = createPushUpCounter();
+
+    // Calibrate with RIGHT SIDE
+    for (let i = 0; i < 4; i++) {
+      counter.handleFrame(createTrueRightSideCalibrationFrame(0.99, 0.90, 172, 1000 + i * 100));
+    }
+    counter.handleFrame(createTrueRightSideCalibrationFrame(0.99, 0.90, 172, 1400));
+    assert.equal(counter.handleFrame(createTrueRightSideCalibrationFrame(0.99, 0.90, 172, 1450)).phase, 'ready');
+
+    // Complete one rep first
+    function createRightArmFrame(position: number, conf: number, ts: number): PoseFrame {
+      const wrist = calculateWristForAngle(300, 50, 300, 200, position);
+      return appleVisionFrame([
+        { name: 'rightShoulder', x: 300, y: 50, confidence: conf },
+        { name: 'rightElbow', x: 300, y: 200, confidence: conf },
+        { name: 'rightWrist', x: wrist.x, y: wrist.y, confidence: conf },
+      ], ts);
+    }
+
+    counter.handleFrame(createRightArmFrame(142, 0.90, 2000));
+    counter.handleFrame(createRightArmFrame(142, 0.90, 2100));
+    counter.handleFrame(createRightArmFrame(170, 0.90, 3000));
+    const afterRep = counter.handleFrame(createRightArmFrame(170, 0.90, 3100));
+    assert.equal(afterRep.count, 1, 'Should have counted 1 rep');
+
+    // Right landmarks exist but low confidence for >1500ms, Left always valid
+    function createLowConfFrame(ts: number): PoseFrame {
+      const rightWrist = calculateWristForAngle(300, 50, 300, 200, 142);
+      const leftWrist = calculateWristForAngle(100, 50, 100, 200, 170);
+
+      return appleVisionFrame([
+        { name: 'leftShoulder', x: 100, y: 50, confidence: 0.95 },
+        { name: 'leftElbow', x: 100, y: 200, confidence: 0.95 },
+        { name: 'leftWrist', x: leftWrist.x, y: leftWrist.y, confidence: 0.95 },
+        // Right landmarks present but confidence 0.20
+        { name: 'rightShoulder', x: 300, y: 50, confidence: 0.20 },
+        { name: 'rightElbow', x: 300, y: 200, confidence: 0.20 },
+        { name: 'rightWrist', x: rightWrist.x, y: rightWrist.y, confidence: 0.20 },
+      ], ts);
+    }
+
+    counter.handleFrame(createLowConfFrame(3200));
+    counter.handleFrame(createLowConfFrame(3800));
+    counter.handleFrame(createLowConfFrame(4400));
+    const afterLoss = counter.handleFrame(createLowConfFrame(4800)); // 1600ms total
+
+    assert.equal(afterLoss.phase, 'waiting_for_body', 'Should reset after >1500ms low confidence');
+    assert.equal(afterLoss.count, 1, 'Should preserve count');
+  });
+});
