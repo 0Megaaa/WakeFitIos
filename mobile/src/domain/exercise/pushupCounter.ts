@@ -86,6 +86,7 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
   let calibrationMode: CalibrationMode | null = null;
   let calibrationCandidate: CalibrationMode | null = null;
   let calibrationFrames = 0;
+  let calibrationMissFrames = 0; // V1.8.1: 1-frame miss tolerance
   let standingRejectFrames = 0;
 
   function isAppleVision(frame: PoseFrame): boolean {
@@ -230,15 +231,18 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
   /**
    * Check if frame represents a clearly standing pose.
    * Used to reject standing poses during calibration.
-   * Only returns true if there's clear vertical alignment in the lower body.
+   * Uses normalized geometry (not fixed pixels).
+   * Supports multi-level standing chain when some lower body points are missing.
    */
   function isClearlyStandingPose(
     byName: Map<string, { x: number; y: number; confidence: number }>,
+    frame: PoseFrame,
   ): boolean {
-    // Check if we have enough lower body landmarks for standing detection
-    const getAux = (name: string) => byName.get(name);
+    // Use imageHeight for normalization
+    const imageHeight = frame.imageHeight || 640;
+    const normalizeThreshold = 0.15; // ~15% of image height minimum for standing
 
-    // Try to find a clear standing chain on one side
+    const getAux = (name: string) => byName.get(name);
     const sides: Array<'left' | 'right'> = ['left', 'right'];
     let standingScore = 0;
 
@@ -249,39 +253,59 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
       const ankle = getAux(`${side}Ankle`);
 
       let thisSideStanding = false;
-      let verticalCount = 0;
-      let totalVerticalSpan = 0;
 
-      // Check for vertical arrangement: shoulder -> hip -> knee -> ankle
-      // Must have sufficient x-alignment (close to same x) for true standing
-      if (shoulder && hip && shoulder.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE && hip.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE) {
-        if (shoulder.y < hip.y) {
-          verticalCount++;
-          totalVerticalSpan += hip.y - shoulder.y;
-        }
-      }
-      if (hip && knee && hip.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE && knee.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE) {
-        if (hip.y < knee.y) {
-          verticalCount++;
-          totalVerticalSpan += knee.y - hip.y;
-        }
-      }
-      if (knee && ankle && knee.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE && ankle.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE) {
-        if (knee.y < ankle.y) {
-          verticalCount++;
-          totalVerticalSpan += ankle.y - knee.y;
-        }
-      }
+      // Priority A: Full chain shoulder → hip → knee → ankle
+      if (shoulder && hip && knee && ankle &&
+          shoulder.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE &&
+          hip.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE &&
+          knee.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE &&
+          ankle.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE) {
 
-      // For standing: need 2+ vertical relationships AND significant vertical span
-      // AND the body segments should be roughly aligned (not diagonal)
-      if (verticalCount >= 2 && totalVerticalSpan > 150) {
-        // Check x-alignment for hip and knee (should be similar for standing)
-        const hipKneeXDiff = knee && hip ? Math.abs(knee.x - hip.x) : 999;
-        const kneeAnkleXDiff = ankle && knee ? Math.abs(ankle.x - knee.x) : 999;
-        
-        // If x differences are small relative to vertical span, it's more vertical (standing)
-        if (hipKneeXDiff < totalVerticalSpan * 0.5 && kneeAnkleXDiff < totalVerticalSpan * 0.5) {
+        const verticalSpan = ankle.y - shoulder.y;
+        const normalizedSpan = verticalSpan / imageHeight;
+
+        // Check y-order: shoulder < hip < knee < ankle
+        const yOrderValid = shoulder.y < hip.y && hip.y < knee.y && knee.y < ankle.y;
+
+        // Check x-alignment: body should be vertical (x should be similar)
+        const bodyXSpan = Math.abs(ankle.x - shoulder.x);
+        const xRatio = bodyXSpan / Math.max(verticalSpan, 1);
+
+        if (yOrderValid && normalizedSpan >= normalizeThreshold && xRatio <= 0.5) {
+          thisSideStanding = true;
+        }
+      }
+      // Priority B: shoulder → hip → knee (3 points)
+      else if (shoulder && hip && knee &&
+               shoulder.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE &&
+               hip.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE &&
+               knee.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE) {
+
+        const verticalSpan = knee.y - shoulder.y;
+        const normalizedSpan = verticalSpan / imageHeight;
+
+        const yOrderValid = shoulder.y < hip.y && hip.y < knee.y;
+        const bodyXSpan = Math.abs(knee.x - shoulder.x);
+        const xRatio = bodyXSpan / Math.max(verticalSpan, 1);
+
+        if (yOrderValid && normalizedSpan >= normalizeThreshold && xRatio <= 0.5) {
+          thisSideStanding = true;
+        }
+      }
+      // Priority C: hip → knee → ankle (3 points)
+      else if (hip && knee && ankle &&
+               hip.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE &&
+               knee.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE &&
+               ankle.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE) {
+
+        const verticalSpan = ankle.y - hip.y;
+        const normalizedSpan = verticalSpan / imageHeight;
+
+        const yOrderValid = hip.y < knee.y && knee.y < ankle.y;
+        const bodyXSpan = Math.abs(ankle.x - hip.x);
+        const xRatio = bodyXSpan / Math.max(verticalSpan, 1);
+
+        if (yOrderValid && normalizedSpan >= normalizeThreshold && xRatio <= 0.5) {
           thisSideStanding = true;
         }
       }
@@ -298,8 +322,7 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
   /**
    * Check if frame meets FRONT calibration criteria.
    * Front mode: head facing camera, body along depth axis.
-   * Requires both arms visible and extended.
-   * Fallback: if only one arm visible but extended, still allow calibration.
+   * HARD RULE: Must have BOTH left and right arm chains visible and extended.
    */
   function checkFrontCalibration(
     byName: Map<string, { x: number; y: number; confidence: number }>,
@@ -307,62 +330,49 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
     const leftArm = hasArmChainForCalibration(byName, 'left');
     const rightArm = hasArmChainForCalibration(byName, 'right');
 
-    // Need at least one arm
-    if (!leftArm && !rightArm) {
+    // HARD REQUIREMENT: Both arms must exist
+    if (!leftArm || !rightArm) {
       return false;
     }
 
-    // For FRONT mode, prefer both arms but allow single arm if well-formed
-    const arm = leftArm || rightArm;
-    if (!arm) return false;
+    // Both elbows should be extended (>145 degrees)
+    const leftAngle = calculateAngle(leftArm.shoulder, leftArm.elbow, leftArm.wrist);
+    const rightAngle = calculateAngle(rightArm.shoulder, rightArm.elbow, rightArm.wrist);
 
-    // Elbow should be extended
-    const elbowAngle = calculateAngle(arm.shoulder, arm.elbow, arm.wrist);
-    if (elbowAngle < CALIBRATION_MIN_ELBOW_ANGLE) {
+    if (leftAngle < CALIBRATION_MIN_ELBOW_ANGLE || rightAngle < CALIBRATION_MIN_ELBOW_ANGLE) {
       return false;
     }
 
-    // Wrist should be below shoulder (plank position)
-    if (arm.wrist.y <= arm.shoulder.y) {
+    // Wrists should be below shoulders (in plank position)
+    if (leftArm.wrist.y <= leftArm.shoulder.y || rightArm.wrist.y <= rightArm.shoulder.y) {
       return false;
     }
 
-    // Elbow should be between shoulder and wrist vertically
-    if (arm.elbow.y <= arm.shoulder.y || arm.elbow.y >= arm.wrist.y) {
+    // Elbows should be between shoulder and wrist vertically
+    if (leftArm.elbow.y <= leftArm.shoulder.y || leftArm.elbow.y >= leftArm.wrist.y) {
+      return false;
+    }
+    if (rightArm.elbow.y <= rightArm.shoulder.y || rightArm.elbow.y >= rightArm.wrist.y) {
       return false;
     }
 
-    // If both arms present, do additional checks
-    if (leftArm && rightArm) {
-      // Shoulders should be roughly at same height
-      const shoulderYDiff = Math.abs(leftArm.shoulder.y - rightArm.shoulder.y);
-      const armLength = Math.hypot(
-        leftArm.shoulder.x - leftArm.wrist.x,
-        leftArm.shoulder.y - leftArm.wrist.y,
-      );
-      if (armLength > 0 && shoulderYDiff / armLength > 0.3) {
-        return false;
-      }
+    // Shoulders should be roughly at same height (normalized)
+    const shoulderYDiff = Math.abs(leftArm.shoulder.y - rightArm.shoulder.y);
+    const armLength = Math.hypot(
+      leftArm.shoulder.x - leftArm.wrist.x,
+      leftArm.shoulder.y - leftArm.wrist.y,
+    );
+    if (armLength > 0 && shoulderYDiff / armLength > 0.3) {
+      return false; // Shoulders too uneven
+    }
 
-      // Wrists should be reasonably separated
-      const wristWidth = Math.abs(leftArm.wrist.x - rightArm.wrist.x);
-      const shoulderWidth = Math.abs(leftArm.shoulder.x - rightArm.shoulder.x);
-      if (shoulderWidth > 0) {
-        const wristRatio = wristWidth / shoulderWidth;
-        if (wristRatio < 0.5 || wristRatio > 2.5) {
-          return false;
-        }
-      }
-
-      // Both elbows should be extended
-      const rightAngle = calculateAngle(rightArm.shoulder, rightArm.elbow, rightArm.wrist);
-      if (rightAngle < CALIBRATION_MIN_ELBOW_ANGLE) {
-        return false;
-      }
-
-      // Both wrists should be below shoulders
-      if (rightArm.wrist.y <= rightArm.shoulder.y) {
-        return false;
+    // Wrists should be reasonably separated (normalized)
+    const wristWidth = Math.abs(leftArm.wrist.x - rightArm.wrist.x);
+    const shoulderWidth = Math.abs(leftArm.shoulder.x - rightArm.shoulder.x);
+    if (shoulderWidth > 0) {
+      const wristRatio = wristWidth / shoulderWidth;
+      if (wristRatio < 0.5 || wristRatio > 2.5) {
+        return false; // Wrists too close or too far apart
       }
     }
 
@@ -372,6 +382,7 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
   /**
    * Check if frame meets SIDE calibration criteria.
    * Side mode: body sideways to camera, horizontal body axis.
+   * HARD RULE: Must have same-side arm chain AND hip.
    */
   function checkSideCalibration(
     byName: Map<string, { x: number; y: number; confidence: number }>,
@@ -399,31 +410,44 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
       return false;
     }
 
-    // Check if body axis is more horizontal than vertical
+    // HARD REQUIREMENT: Same-side hip must exist
     const hip = byName.get(`${armSide}Hip`);
-    if (hip && hip.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE) {
-      const dx = Math.abs(hip.x - arm.shoulder.x);
-      const dy = Math.abs(hip.y - arm.shoulder.y);
+    if (!hip || hip.confidence < CALIBRATION_ARM_AUX_CONFIDENCE) {
+      return false;
+    }
 
-      // If dy is too large relative to dx, body is more vertical (standing)
-      if (dx > 0 && dy / dx > 1.2) {
+    // Check if body axis is more horizontal than vertical
+    // shoulder → hip should be primarily horizontal
+    const dx = Math.abs(hip.x - arm.shoulder.x);
+    const dy = Math.abs(hip.y - arm.shoulder.y);
+
+    // dx must be meaningful (not near zero)
+    if (dx < 10) {
+      return false; // Too vertical
+    }
+
+    // Normalized ratio: dy/dx <= 0.8
+    if (dy / dx > 0.8) {
+      return false; // Too vertical
+    }
+
+    // Knee/Ankle are optional but can enhance verification
+    const knee = byName.get(`${armSide}Knee`);
+    const ankle = byName.get(`${armSide}Ankle`);
+
+    // If hip + knee both available, check hip → knee is also horizontal
+    if (knee && knee.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE) {
+      const hipKneeDx = Math.abs(knee.x - hip.x);
+      const hipKneeDy = Math.abs(knee.y - hip.y);
+      if (hipKneeDx > 0 && hipKneeDy / hipKneeDx > 0.8) {
         return false; // Too vertical
       }
     }
 
-    // Check lower body if available - should be horizontal
-    const knee = byName.get(`${armSide}Knee`);
-    const ankle = byName.get(`${armSide}Ankle`);
-
-    if (hip && knee && hip.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE && knee.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE) {
-      const hipKneeDx = Math.abs(knee.x - hip.x);
-      const hipKneeDy = Math.abs(knee.y - hip.y);
-      if (hipKneeDx > 0 && hipKneeDy / hipKneeDx > 0.8) {
-        return false;
-      }
-    }
-
-    if (knee && ankle && knee.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE && ankle.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE) {
+    // If knee + ankle both available, check knee → ankle is also horizontal
+    if (knee && ankle &&
+        knee.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE &&
+        ankle.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE) {
       const kneeAnkleDx = Math.abs(ankle.x - knee.x);
       const kneeAnkleDy = Math.abs(ankle.y - knee.y);
       if (kneeAnkleDx > 0 && kneeAnkleDy / kneeAnkleDx > 0.8) {
@@ -441,6 +465,7 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
     calibrationMode = null;
     calibrationCandidate = null;
     calibrationFrames = 0;
+    calibrationMissFrames = 0;
     standingRejectFrames = 0;
   }
 
@@ -669,7 +694,7 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
       const byName = getLandmarks(frame);
 
       // Check for clearly standing pose (rejection)
-      if (isClearlyStandingPose(byName)) {
+      if (isClearlyStandingPose(byName, frame)) {
         standingRejectFrames++;
 
         if (standingRejectFrames >= CALIBRATION_STANDING_REJECT_FRAMES) {
@@ -725,7 +750,9 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
           const candidate: CalibrationMode = frontCandidate ? 'front' : 'side';
 
           if (candidate === calibrationCandidate) {
+            // Same candidate - increment valid frames
             calibrationFrames++;
+            calibrationMissFrames = 0;
 
             if (calibrationFrames >= CALIBRATION_MIN_STABLE_FRAMES) {
               // Calibration successful!
@@ -739,14 +766,23 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
               return currentResult(true);
             }
           } else {
-            // New candidate or changed candidate
+            // New candidate or changed candidate - reset
             calibrationCandidate = candidate;
             calibrationFrames = 1;
+            calibrationMissFrames = 0;
           }
         } else {
-          // Not a valid calibration frame
-          calibrationCandidate = null;
-          calibrationFrames = 0;
+          // Not a valid calibration frame - apply 1-frame miss tolerance
+          if (calibrationCandidate !== null && calibrationMissFrames < 1) {
+            // Allow 1 miss frame
+            calibrationMissFrames++;
+            // Keep calibrationCandidate and calibrationFrames
+          } else {
+            // Clear calibration state
+            calibrationCandidate = null;
+            calibrationFrames = 0;
+            calibrationMissFrames = 0;
+          }
         }
 
         // Still calibrating - don't count yet

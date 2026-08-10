@@ -29,6 +29,9 @@ function pushUpFrame(
     ? { x: 50, y: 350 }   // Extended - 180°
     : { x: 100, y: 100 };  // Bent - 26.6°
 
+  // For FRONT calibration, need both arms with same geometry
+  const rightWristX = 200 - (50 - wrist.x); // Mirror x position
+
   return {
     timestampMs,
     imageWidth: 300,
@@ -37,9 +40,15 @@ function pushUpFrame(
     source: 'apple-vision',
     coordinateSpace: 'upright-top-left-unmirrored',
     landmarks: [
+      // Left arm
       landmark('leftShoulder', 50, 50, confidence),
       landmark('leftElbow', 50, 200, confidence),
       landmark('leftWrist', wrist.x, wrist.y, confidence),
+      // Right arm
+      landmark('rightShoulder', 200, 50, confidence),
+      landmark('rightElbow', 200, 200, confidence),
+      landmark('rightWrist', rightWristX, wrist.y, confidence),
+      // Hip (for context)
       landmark('leftHip', 50, 250, confidence),
     ],
   };
