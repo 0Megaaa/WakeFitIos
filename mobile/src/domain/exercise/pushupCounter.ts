@@ -470,28 +470,19 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
     const leftValid = checkSideCalibrationForSide(byName, 'left');
     const rightValid = checkSideCalibrationForSide(byName, 'right');
 
-    // Prefer current active side if still valid
-    if (appleVisionActiveSide === 'left' && leftValid) {
-      return 'left';
-    }
-    if (appleVisionActiveSide === 'right' && rightValid) {
-      return 'right';
-    }
-
-    // If neither side is active, choose the better one by arm confidence
+    // Only one side valid - use that side
     if (leftValid && !rightValid) {
       return 'left';
     }
     if (rightValid && !leftValid) {
       return 'right';
     }
+    // Both sides valid - prefer current active side if still valid
     if (leftValid && rightValid) {
-      // Both sides valid - prefer current active side
-      if (appleVisionActiveSide !== null) {
-        return appleVisionActiveSide;
+      if (appleVisionActiveSide === 'left' || appleVisionActiveSide === null) {
+        return 'left';
       }
-      // Fall back to left
-      return 'left';
+      return 'right';
     }
 
     return null;
@@ -826,14 +817,22 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
               calibrationMode = candidate;
               phase = 'ready';
 
-              // V1.8.2: Set active side for SIDE
+              // V1.8.3: For SIDE, use the side that actually passed SIDE calibration
+              // NOT the side from getBestConfidentSide which may be different
               if (candidate === 'side' && sideCandidate !== null) {
                 appleVisionActiveSide = sideCandidate;
               }
 
-              // Establish baseline from this frame
-              lastElbowAngle = calculateAngle(side.shoulder, side.elbow, side.wrist);
-              appleVisionUpBaselineAngle = lastElbowAngle;
+              // V1.8.3: Establish baseline from the correct side
+              // SIDE: use sideCandidate arm; FRONT: use side (getBestConfidentSide result)
+              const baselineArm = (candidate === 'side' && sideCandidate !== null)
+                ? getSideLandmarks(frame, sideCandidate)
+                : side;
+
+              if (baselineArm) {
+                lastElbowAngle = calculateAngle(baselineArm.shoulder, baselineArm.elbow, baselineArm.wrist);
+                appleVisionUpBaselineAngle = lastElbowAngle;
+              }
 
               return currentResult(true);
             }
@@ -865,8 +864,17 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
       }
 
       // ===== CALIBRATED - NORMAL COUNTING LOGIC =====
-      // Calculate elbow angle
-      lastElbowAngle = calculateAngle(side.shoulder, side.elbow, side.wrist);
+      // V1.8.3: Use the calibrated side if available, otherwise use getBestConfidentSide result
+      let activeSide = side;
+      if (calibrationMode === 'side' && appleVisionActiveSide !== null) {
+        const calibratedArm = getSideLandmarks(frame, appleVisionActiveSide);
+        if (calibratedArm) {
+          activeSide = { side: appleVisionActiveSide, ...calibratedArm };
+        }
+      }
+
+      // Calculate elbow angle from the correct side
+      lastElbowAngle = calculateAngle(activeSide.shoulder, activeSide.elbow, activeSide.wrist);
 
       // Classify pose
       let observedPose: 'up' | 'down' | null;
