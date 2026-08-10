@@ -75,6 +75,7 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
 
   // Apple Vision specific counting state
   let appleVisionUpBaselineAngle: number | null = null;
+  let appleVisionUpBaselineSide: 'left' | 'right' | null = null; // V1.8.5: track which side the baseline belongs to
   let appleVisionActiveSide: 'left' | 'right' | null = null;
 
   // Grace timeout for temporary arm loss
@@ -511,6 +512,7 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
     candidatePose = null;
     candidateFrames = 0;
     appleVisionUpBaselineAngle = null;
+    appleVisionUpBaselineSide = null; // V1.8.5
     appleVisionActiveSide = null;
     invalidStartTimestampMs = null;
     lastValidArmTimestampMs = null;
@@ -618,11 +620,13 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
 
   /**
    * Classify elbow pose using absolute and relative thresholds.
+   * V1.8.5: Only apply relative fallback if baseline and current are same side.
    */
   function classifyElbowPoseForAppleVision(
     angle: number,
     absoluteDownAngle: number,
     upAngle: number,
+    currentSide: 'left' | 'right' | null,
   ): 'up' | 'down' | null {
     if (angle >= upAngle) {
       return 'up';
@@ -632,8 +636,8 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
       return 'down';
     }
 
-    // Check relative DOWN fallback
-    if (appleVisionUpBaselineAngle !== null) {
+    // V1.8.5: Check relative DOWN fallback only if baseline is from same side
+    if (appleVisionUpBaselineAngle !== null && appleVisionUpBaselineSide === currentSide) {
       const delta = appleVisionUpBaselineAngle - angle;
       if (delta >= APPLE_VISION_RELATIVE_DOWN_DELTA && angle <= APPLE_VISION_RELATIVE_DOWN_MAX_ANGLE) {
         return 'down';
@@ -682,6 +686,7 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
           candidatePose = null;
           candidateFrames = 0;
           appleVisionUpBaselineAngle = null;
+          appleVisionUpBaselineSide = null; // V1.8.5
           appleVisionActiveSide = null;
           invalidStartTimestampMs = null;
           lastValidArmTimestampMs = null;
@@ -742,17 +747,22 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
 
       // Track arm validity
       // V1.8.4: For SIDE calibration, lock to calibratedSide instead of dynamic selection
+      // V1.8.5: Must check confidence, not just existence of landmarks
       let side: { side: 'left' | 'right'; shoulder: { x: number; y: number; confidence: number }; elbow: { x: number; y: number; confidence: number }; wrist: { x: number; y: number; confidence: number } } | null = null;
 
       if (calibrationMode === 'side' && calibratedSide !== null) {
-        // SIDE calibrated: use locked side only
-        const calibratedArm = getSideLandmarks(frame, calibratedSide);
-        if (calibratedArm) {
-          side = { side: calibratedSide, ...calibratedArm };
-          // Update appleVisionActiveSide to match calibratedSide
-          appleVisionActiveSide = calibratedSide;
+        // V1.8.5: SIDE calibrated: first check if confidence is sufficient
+        const calibratedArmIsValid = hasValidArmSide(frame, calibratedSide, minConfidence);
+        if (calibratedArmIsValid) {
+          const calibratedArm = getSideLandmarks(frame, calibratedSide);
+          if (calibratedArm) {
+            side = { side: calibratedSide, ...calibratedArm };
+            // Update appleVisionActiveSide to match calibratedSide
+            appleVisionActiveSide = calibratedSide;
+          }
         }
-        // If calibratedSide arm is invalid, side remains null (grace period will handle this)
+        // If confidence insufficient, side remains null (grace period will handle this)
+        // V1.8.5: DO NOT fall back to other side
       } else {
         // FRONT or not calibrated: use getBestConfidentSide for dynamic selection
         side = getBestConfidentSide(frame, minConfidence);
@@ -852,6 +862,10 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
               if (baselineArm) {
                 lastElbowAngle = calculateAngle(baselineArm.shoulder, baselineArm.elbow, baselineArm.wrist);
                 appleVisionUpBaselineAngle = lastElbowAngle;
+                // V1.8.5: Set baseline side correctly
+                appleVisionUpBaselineSide = (candidate === 'side' && sideCandidate !== null)
+                  ? sideCandidate
+                  : side.side;
               }
 
               return currentResult(true);
@@ -892,14 +906,21 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
       // Classify pose
       let observedPose: 'up' | 'down' | null;
       if (isAV) {
-        observedPose = classifyElbowPoseForAppleVision(lastElbowAngle, downAngle, upAngle);
+        observedPose = classifyElbowPoseForAppleVision(lastElbowAngle, downAngle, upAngle, side.side);
 
-        // Track UP baseline for relative fallback
+        // V1.8.5: Track UP baseline with side
         if (observedPose === 'up') {
           if (appleVisionUpBaselineAngle === null) {
+            // First UP frame - establish baseline
             appleVisionUpBaselineAngle = lastElbowAngle;
-          } else {
+            appleVisionUpBaselineSide = side.side;
+          } else if (appleVisionUpBaselineSide === side.side) {
+            // Same side as baseline - only allow baseline to increase (anti-drift)
             appleVisionUpBaselineAngle = Math.max(appleVisionUpBaselineAngle, lastElbowAngle);
+          } else {
+            // Side switched - keep original baseline, don't switch to new side's angle
+            // This prevents lower readings on new side from dragging baseline down
+            // The original baseline remains valid for the old side
           }
         }
       } else {
@@ -933,7 +954,9 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
 
       if (phase === 'ready' && observedPose === 'down') {
         phase = 'down';
+        // V1.8.5: Clear both baseline angle and side
         appleVisionUpBaselineAngle = null;
+        appleVisionUpBaselineSide = null;
       }
 
       return currentResult(true);

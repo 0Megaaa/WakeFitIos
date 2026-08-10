@@ -1888,3 +1888,35 @@ describe('V1.8.4 FRONT should allow dynamic side switching', () => {
     assert.equal(countResult.count, 1, 'Should count with dynamic right arm');
   });
 });
+
+// ============================================================
+// V1.8.5 FRONT SIDE-SWITCH BASELINE TESTS
+// ============================================================
+
+describe('V1.8.5 FRONT side-switch should not use cross-side baseline', () => {
+  it('FRONT Left baseline 172, switch to Right 142 should NOT trigger relative DOWN', () => {
+    const counter = createPushUpCounter();
+
+    // FRONT dual-arm calibration
+    for (let i = 0; i < 4; i++) {
+      counter.handleFrame(createFrontCalibrationFrame(172, 0.95, 100 + i * 100));
+    }
+    assert.equal(counter.handleFrame(createFrontCalibrationFrame(172, 0.95, 500)).phase, 'ready');
+
+    // Switch to right arm only with lower angle (142°)
+    function createRightOnlyFrame(position: number, conf: number, ts: number): PoseFrame {
+      const wrist = calculateWristForAngle(200, 80, 200, 200, position);
+      return appleVisionFrame([
+        { name: 'rightShoulder', x: 200, y: 80, confidence: conf },
+        { name: 'rightElbow', x: 200, y: 200, confidence: conf },
+        { name: 'rightWrist', x: wrist.x, y: wrist.y, confidence: conf },
+      ], ts);
+    }
+
+    // Right 142° should NOT trigger relative DOWN (cross-side not allowed)
+    for (let i = 0; i < 3; i++) {
+      const result = counter.handleFrame(createRightOnlyFrame(142, 0.95, 1000 + i * 100));
+      assert.notEqual(result.phase, 'down', `Frame ${i + 1}: should NOT enter down from Right with Left baseline`);
+    }
+  });
+});
