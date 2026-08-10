@@ -85,6 +85,7 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
   type CalibrationMode = 'front' | 'side';
   let calibrationMode: CalibrationMode | null = null;
   let calibrationCandidate: CalibrationMode | null = null;
+  let calibrationCandidateSide: 'left' | 'right' | null = null; // V1.8.2: track which side
   let calibrationFrames = 0;
   let calibrationMissFrames = 0; // V1.8.1: 1-frame miss tolerance
   let standingRejectFrames = 0;
@@ -380,24 +381,17 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
   }
 
   /**
-   * Check if frame meets SIDE calibration criteria.
-   * Side mode: body sideways to camera, horizontal body axis.
-   * HARD RULE: Must have same-side arm chain AND hip.
+   * Check if a single side meets SIDE calibration criteria.
+   * Returns 'left' or 'right' if that side qualifies, null otherwise.
    */
-  function checkSideCalibration(
+  function checkSideCalibrationForSide(
     byName: Map<string, { x: number; y: number; confidence: number }>,
+    side: 'left' | 'right',
   ): boolean {
-    // Need at least one arm chain
-    const leftArm = hasArmChainForCalibration(byName, 'left');
-    const rightArm = hasArmChainForCalibration(byName, 'right');
-
-    if (!leftArm && !rightArm) {
+    const arm = hasArmChainForCalibration(byName, side);
+    if (!arm) {
       return false;
     }
-
-    // Use the better arm
-    const arm = leftArm ? leftArm : rightArm!;
-    const armSide = leftArm ? 'left' : 'right';
 
     // Elbow should be extended
     const elbowAngle = calculateAngle(arm.shoulder, arm.elbow, arm.wrist);
@@ -411,7 +405,7 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
     }
 
     // HARD REQUIREMENT: Same-side hip must exist
-    const hip = byName.get(`${armSide}Hip`);
+    const hip = byName.get(`${side}Hip`);
     if (!hip || hip.confidence < CALIBRATION_ARM_AUX_CONFIDENCE) {
       return false;
     }
@@ -421,19 +415,26 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
     const dx = Math.abs(hip.x - arm.shoulder.x);
     const dy = Math.abs(hip.y - arm.shoulder.y);
 
-    // dx must be meaningful (not near zero)
-    if (dx < 10) {
-      return false; // Too vertical
+    // Use normalized geometry: armLength for scale invariance
+    const armLength = Math.hypot(
+      arm.wrist.x - arm.shoulder.x,
+      arm.wrist.y - arm.shoulder.y,
+    );
+
+    // bodyHorizontalRatio should be meaningful (not near zero relative to arm length)
+    const bodyHorizontalRatio = dx / Math.max(armLength, 1);
+    if (bodyHorizontalRatio < 0.15) {
+      return false; // Too vertical relative to arm
     }
 
     // Normalized ratio: dy/dx <= 0.8
-    if (dy / dx > 0.8) {
+    if (dx > 0 && dy / dx > 0.8) {
       return false; // Too vertical
     }
 
     // Knee/Ankle are optional but can enhance verification
-    const knee = byName.get(`${armSide}Knee`);
-    const ankle = byName.get(`${armSide}Ankle`);
+    const knee = byName.get(`${side}Knee`);
+    const ankle = byName.get(`${side}Ankle`);
 
     // If hip + knee both available, check hip → knee is also horizontal
     if (knee && knee.confidence >= CALIBRATION_ARM_AUX_CONFIDENCE) {
@@ -459,11 +460,50 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
   }
 
   /**
+   * Check if frame meets SIDE calibration criteria.
+   * Side mode: body sideways to camera, horizontal body axis.
+   * Returns 'left' or 'right' indicating which side qualifies, null if neither.
+   */
+  function checkSideCalibration(
+    byName: Map<string, { x: number; y: number; confidence: number }>,
+  ): 'left' | 'right' | null {
+    const leftValid = checkSideCalibrationForSide(byName, 'left');
+    const rightValid = checkSideCalibrationForSide(byName, 'right');
+
+    // Prefer current active side if still valid
+    if (appleVisionActiveSide === 'left' && leftValid) {
+      return 'left';
+    }
+    if (appleVisionActiveSide === 'right' && rightValid) {
+      return 'right';
+    }
+
+    // If neither side is active, choose the better one by arm confidence
+    if (leftValid && !rightValid) {
+      return 'left';
+    }
+    if (rightValid && !leftValid) {
+      return 'right';
+    }
+    if (leftValid && rightValid) {
+      // Both sides valid - prefer current active side
+      if (appleVisionActiveSide !== null) {
+        return appleVisionActiveSide;
+      }
+      // Fall back to left
+      return 'left';
+    }
+
+    return null;
+  }
+
+  /**
    * Clear all calibration state (but preserve count)
    */
   function clearCalibration(): void {
     calibrationMode = null;
     calibrationCandidate = null;
+    calibrationCandidateSide = null;
     calibrationFrames = 0;
     calibrationMissFrames = 0;
     standingRejectFrames = 0;
@@ -742,6 +782,17 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
 
       // ===== CALIBRATION LOGIC =====
       if (calibrationMode === null) {
+        // V1.8.2: STANDING HARD GATE - Before calibration, check if clearly standing
+        // If standing, immediately reject this frame from calibration
+        if (isClearlyStandingPose(byName, frame)) {
+          // Clear any pending calibration progress
+          calibrationCandidate = null;
+          calibrationCandidateSide = null;
+          calibrationFrames = 0;
+          calibrationMissFrames = 0;
+          return currentResult(false);
+        }
+
         // Not calibrated yet - try to calibrate
         const frontCandidate = checkFrontCalibration(byName);
         const sideCandidate = checkSideCalibration(byName);
@@ -750,14 +801,35 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
           const candidate: CalibrationMode = frontCandidate ? 'front' : 'side';
 
           if (candidate === calibrationCandidate) {
-            // Same candidate - increment valid frames
-            calibrationFrames++;
-            calibrationMissFrames = 0;
+            // Same candidate mode
+            // V1.8.2: For SIDE, check if side changed
+            if (candidate === 'side') {
+              const currentSide = sideCandidate; // 'left' or 'right'
+              if (calibrationCandidateSide !== currentSide) {
+                // Side changed - reset calibration
+                calibrationCandidateSide = currentSide;
+                calibrationFrames = 1;
+                calibrationMissFrames = 0;
+              } else {
+                // Same side - increment
+                calibrationFrames++;
+                calibrationMissFrames = 0;
+              }
+            } else {
+              // FRONT - same as before
+              calibrationFrames++;
+              calibrationMissFrames = 0;
+            }
 
             if (calibrationFrames >= CALIBRATION_MIN_STABLE_FRAMES) {
               // Calibration successful!
               calibrationMode = candidate;
               phase = 'ready';
+
+              // V1.8.2: Set active side for SIDE
+              if (candidate === 'side' && sideCandidate !== null) {
+                appleVisionActiveSide = sideCandidate;
+              }
 
               // Establish baseline from this frame
               lastElbowAngle = calculateAngle(side.shoulder, side.elbow, side.wrist);
@@ -768,6 +840,7 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
           } else {
             // New candidate or changed candidate - reset
             calibrationCandidate = candidate;
+            calibrationCandidateSide = candidate === 'side' ? sideCandidate : null;
             calibrationFrames = 1;
             calibrationMissFrames = 0;
           }
@@ -776,10 +849,11 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
           if (calibrationCandidate !== null && calibrationMissFrames < 1) {
             // Allow 1 miss frame
             calibrationMissFrames++;
-            // Keep calibrationCandidate and calibrationFrames
+            // Keep calibrationCandidate, calibrationCandidateSide, and calibrationFrames
           } else {
             // Clear calibration state
             calibrationCandidate = null;
+            calibrationCandidateSide = null;
             calibrationFrames = 0;
             calibrationMissFrames = 0;
           }
