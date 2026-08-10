@@ -67,7 +67,6 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
 
   // Apple Vision specific state
   let appleVisionUpBaselineAngle: number | null = null;
-  let appleVisionBaselineFrames = 0;
   let appleVisionActiveSide: 'left' | 'right' | null = null;
 
   // Grace timeout for temporary arm loss
@@ -359,7 +358,8 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
       }
 
       // Check for grace timeout - temporary arm loss
-      if (!side && lastValidArmTimestampMs !== null && invalidStartTimestampMs === null) {
+      // Apple Vision ONLY: ML Kit should reset immediately on no valid arm
+      if (!side && isAV && lastValidArmTimestampMs !== null && invalidStartTimestampMs === null) {
         invalidStartTimestampMs = frame.timestampMs;
       }
 
@@ -367,20 +367,19 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
       if (!side && invalidStartTimestampMs !== null) {
         const invalidDuration = frame.timestampMs - invalidStartTimestampMs;
 
-        // Within grace period: preserve state but mark not ready
-        if (invalidDuration < invalidThreshold) {
+        // Apple Vision ONLY: Within grace period, preserve state but mark not ready
+        if (isAV && invalidDuration < invalidThreshold) {
           // Keep current phase and count, but don't update state
           // This allows temporary arm loss without resetting
           return currentResult(false);
         }
 
-        // Grace period exceeded: full reset tracking
+        // Grace period exceeded (Apple Vision) OR immediate reset (ML Kit)
         phase = 'waiting_for_body';
         lastElbowAngle = null;
         candidatePose = null;
         candidateFrames = 0;
         appleVisionUpBaselineAngle = null;
-        appleVisionBaselineFrames = 0;
         appleVisionActiveSide = null;
         invalidStartTimestampMs = null;
         lastValidArmTimestampMs = null;
@@ -394,7 +393,6 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
         candidatePose = null;
         candidateFrames = 0;
         appleVisionUpBaselineAngle = null;
-        appleVisionBaselineFrames = 0;
         appleVisionActiveSide = null;
         return currentResult(false);
       }
@@ -410,16 +408,16 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
         isRelativeDownFallback = observedPose === 'down' && lastElbowAngle > downAngle;
 
         // Track UP baseline for relative fallback
+        // Use Math.max to prevent baseline drift downward
+        // Once user has shown a straight arm (e.g., 172°), lower readings
+        // from vision noise won't drag the baseline down
         if (observedPose === 'up') {
           if (appleVisionUpBaselineAngle === null) {
             appleVisionUpBaselineAngle = lastElbowAngle;
-            appleVisionBaselineFrames = 1;
           } else {
-            // Average with existing baseline for stability
-            appleVisionUpBaselineAngle =
-              (appleVisionUpBaselineAngle * appleVisionBaselineFrames + lastElbowAngle) /
-              (appleVisionBaselineFrames + 1);
-            appleVisionBaselineFrames += 1;
+            // Only update if current angle is higher (more extended)
+            // This prevents baseline from drifting down due to vision noise
+            appleVisionUpBaselineAngle = Math.max(appleVisionUpBaselineAngle, lastElbowAngle);
           }
         }
         // Note: We only reset baseline when:
@@ -459,7 +457,6 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
         phase = 'down';
         // Reset baseline when DOWN is confirmed - we'll establish new baseline when up again
         appleVisionUpBaselineAngle = null;
-        appleVisionBaselineFrames = 0;
       }
 
       return currentResult(true);
@@ -472,7 +469,6 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
       candidatePose = null;
       candidateFrames = 0;
       appleVisionUpBaselineAngle = null;
-      appleVisionBaselineFrames = 0;
       appleVisionActiveSide = null;
       invalidStartTimestampMs = null;
       lastValidArmTimestampMs = null;
@@ -485,7 +481,6 @@ export function createPushUpCounter(options: PushUpCounterOptions = {}): PushUpC
       candidatePose = null;
       candidateFrames = 0;
       appleVisionUpBaselineAngle = null;
-      appleVisionBaselineFrames = 0;
       appleVisionActiveSide = null;
       invalidStartTimestampMs = null;
       lastValidArmTimestampMs = null;

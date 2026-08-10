@@ -371,6 +371,48 @@ describe('Apple Vision push-up - relative elbow fallback', () => {
     assert.equal(upResult.count, 1);
   });
 
+  it('Test 5a: baseline drift protection - lower UP readings cannot drag baseline down', () => {
+    // V1.7.1 fix: baseline uses Math.max, so lower UP readings don't drag baseline down
+    //
+    // Initial baseline at 172°
+    // Then vision outputs: 158, 155, 153, 151, 150 (all still >= 150 = UP)
+    // Baseline should remain at ~172° due to Math.max protection
+    //
+    // Then 142° (relative down): delta = 172 - 142 = 30 >= 25
+    // Should still be recognized as DOWN
+    const counter = createPushUpCounter();
+
+    // Initial true UP at 172°
+    counter.handleFrame(createPushUpFrame('left', 172, 0.95, 'apple-vision', 1000, false));
+    counter.handleFrame(createPushUpFrame('left', 172, 0.95, 'apple-vision', 1100, false));
+    // Should be ready with baseline ~172°
+    let result = counter.handleFrame(createPushUpFrame('left', 172, 0.95, 'apple-vision', 1200, false));
+    assert.equal(result.phase, 'ready');
+
+    // Continue with lower but still valid UP readings
+    // These should NOT drag the baseline down
+    counter.handleFrame(createPushUpFrame('left', 158, 0.95, 'apple-vision', 1300, false));
+    counter.handleFrame(createPushUpFrame('left', 155, 0.95, 'apple-vision', 1400, false));
+    counter.handleFrame(createPushUpFrame('left', 153, 0.95, 'apple-vision', 1500, false));
+    counter.handleFrame(createPushUpFrame('left', 151, 0.95, 'apple-vision', 1600, false));
+    counter.handleFrame(createPushUpFrame('left', 150, 0.95, 'apple-vision', 1700, false));
+
+    // Still in ready with baseline protected at ~172°
+    result = counter.handleFrame(createPushUpFrame('left', 150, 0.95, 'apple-vision', 1800, false));
+    assert.equal(result.phase, 'ready');
+
+    // Now 142°: with protected baseline ~172°, delta = 30 >= 25
+    // Should be recognized as DOWN
+    counter.handleFrame(createPushUpFrame('left', 142, 0.95, 'apple-vision', 2000, false));
+    result = counter.handleFrame(createPushUpFrame('left', 142, 0.95, 'apple-vision', 2100, false));
+    assert.equal(result.phase, 'down');
+
+    // Return to UP
+    counter.handleFrame(createPushUpFrame('left', 170, 0.95, 'apple-vision', 3000, false));
+    result = counter.handleFrame(createPushUpFrame('left', 170, 0.95, 'apple-vision', 3100, false));
+    assert.equal(result.count, 1);
+  });
+
   it('Test 6: slight bend should NOT count as down (150° not down)', () => {
     // 150° is the UP threshold for Apple Vision
     // Even if baseline is 170°, 150° is still >= upAngle
@@ -484,19 +526,18 @@ describe('Apple Vision push-up - starting in down state', () => {
 
 describe('Apple Vision push-up - temporary arm occlusion grace', () => {
   it('Test 9: 500ms arm loss during down should preserve down state', () => {
+    // V1.7.1 fix: uses real timestamps to properly test 500ms grace
     const counter = createPushUpCounter();
 
     // UP x2
     counter.handleFrame(createPushUpFrame('left', 'up', 0.95, 'apple-vision', 1000, false));
     counter.handleFrame(createPushUpFrame('left', 'up', 0.95, 'apple-vision', 1100, false));
 
-    // DOWN x2
+    // DOWN x2 (last valid at 2100)
     counter.handleFrame(createPushUpFrame('left', 'down', 0.95, 'apple-vision', 2000, false));
     counter.handleFrame(createPushUpFrame('left', 'down', 0.95, 'apple-vision', 2100, false));
 
-    // Arm lost for 500ms (should be within grace period)
-    // In real scenario, this would be a frame with no arm landmarks
-    // For testing, we simulate this by creating a frame with low confidence arm
+    // Arm lost at 2600 (500ms after last valid at 2100)
     const lostFrame: PoseFrame = {
       timestampMs: 2600,
       imageWidth: 300,
@@ -506,18 +547,20 @@ describe('Apple Vision push-up - temporary arm occlusion grace', () => {
       coordinateSpace: 'upright-top-left-unmirrored',
       landmarks: [], // No landmarks = arm loss
     };
-    counter.handleFrame(lostFrame);
-    const duringLoss = counter.handleFrame(lostFrame);
+    const duringLoss1 = counter.handleFrame({ ...lostFrame, timestampMs: 2600 }); // 500ms elapsed
+    const duringLoss2 = counter.handleFrame({ ...lostFrame, timestampMs: 3100 }); // 1000ms elapsed
     // During grace period, should preserve down state
-    assert.equal(duringLoss.phase, 'down');
-    assert.equal(duringLoss.count, 0);
+    assert.equal(duringLoss1.phase, 'down');
+    assert.equal(duringLoss1.count, 0);
+    assert.equal(duringLoss2.phase, 'down');
+    assert.equal(duringLoss2.count, 0);
 
-    // Arm restored at 2700ms (still within 1500ms grace)
-    counter.handleFrame(createPushUpFrame('left', 'down', 0.95, 'apple-vision', 2700, false));
+    // Arm restored at 3200ms (still within 1500ms grace: 3200 - 2600 = 600ms)
+    counter.handleFrame(createPushUpFrame('left', 'down', 0.95, 'apple-vision', 3200, false));
 
     // UP x2 - complete rep
-    counter.handleFrame(createPushUpFrame('left', 'up', 0.95, 'apple-vision', 3500, false));
-    const result = counter.handleFrame(createPushUpFrame('left', 'up', 0.95, 'apple-vision', 3600, false));
+    counter.handleFrame(createPushUpFrame('left', 'up', 0.95, 'apple-vision', 4000, false));
+    const result = counter.handleFrame(createPushUpFrame('left', 'up', 0.95, 'apple-vision', 4100, false));
 
     assert.equal(result.count, 1);
   });
@@ -571,6 +614,44 @@ describe('Apple Vision push-up - temporary arm occlusion grace', () => {
   });
 });
 
+/**
+ * Create a dual-arm frame for testing side stability.
+ * Both arms are visible with specified confidences.
+ */
+function createDualArmFrame(
+  leftAngle: 'up' | 'down' | number,
+  leftConfidence: number,
+  rightAngle: 'up' | 'down' | number,
+  rightConfidence: number,
+  source: 'apple-vision' | 'mlkit',
+  timestampMs: number,
+): PoseFrame {
+  const createWrist = (angle: 'up' | 'down' | number) => {
+    if (angle === 'up') {
+      return { x: 100, y: 350 };
+    }
+    if (angle === 'down') {
+      return { x: 150, y: 100 };
+    }
+    return calculateWristForAngle(100, 50, 100, 200, angle);
+  };
+
+  const landmarks: Array<{ name: PoseLandmarkName; x: number; y: number; confidence: number }> = [
+    // Left arm
+    { name: 'leftShoulder' as PoseLandmarkName, x: 100, y: 50, confidence: leftConfidence },
+    { name: 'leftElbow' as PoseLandmarkName, x: 100, y: 200, confidence: leftConfidence },
+    { name: 'leftWrist' as PoseLandmarkName, ...createWrist(leftAngle), confidence: leftConfidence },
+    // Right arm
+    { name: 'rightShoulder' as PoseLandmarkName, x: 200, y: 50, confidence: rightConfidence },
+    { name: 'rightElbow' as PoseLandmarkName, x: 200, y: 200, confidence: rightConfidence },
+    { name: 'rightWrist' as PoseLandmarkName, ...createWrist(rightAngle), confidence: rightConfidence },
+  ];
+
+  return source === 'apple-vision'
+    ? appleVisionFrame(landmarks, timestampMs)
+    : mlkitFrame(landmarks, timestampMs);
+}
+
 describe('Apple Vision push-up - side stability', () => {
   it('Test 11: rapid side switching should not cause state jitter', () => {
     const counter = createPushUpCounter();
@@ -603,6 +684,34 @@ describe('Apple Vision push-up - side stability', () => {
     counter.handleFrame(createPushUpFrame('right', 'up', 0.95, 'apple-vision', 5000, false));
     result = counter.handleFrame(createPushUpFrame('right', 'up', 0.95, 'apple-vision', 5100, false));
     assert.equal(result.count, 2);
+  });
+
+  it('Test 11a: dual-arm confidence fluctuation does not cause side switching', () => {
+    // V1.7.1: Apple Vision sticky side strategy should prevent switching
+    // when active side is still valid
+    const counter = createPushUpCounter();
+
+    // UP frames with fluctuating confidences
+    counter.handleFrame(createDualArmFrame('up', 0.95, 'up', 0.80, 'apple-vision', 1000)); // left wins initially
+    counter.handleFrame(createDualArmFrame('up', 0.80, 'up', 0.96, 'apple-vision', 1100)); // right higher
+    counter.handleFrame(createDualArmFrame('up', 0.94, 'up', 0.82, 'apple-vision', 1200)); // left higher
+    counter.handleFrame(createDualArmFrame('up', 0.85, 'up', 0.90, 'apple-vision', 1300)); // right higher
+
+    // Should be ready
+    let result = counter.handleFrame(createDualArmFrame('up', 0.92, 'up', 0.88, 'apple-vision', 1400));
+    assert.equal(result.phase, 'ready');
+
+    // DOWN frames with fluctuating confidences
+    counter.handleFrame(createDualArmFrame('down', 0.88, 'down', 0.92, 'apple-vision', 2000));
+    counter.handleFrame(createDualArmFrame('down', 0.90, 'down', 0.85, 'apple-vision', 2100));
+    result = counter.handleFrame(createDualArmFrame('down', 0.87, 'down', 0.93, 'apple-vision', 2200));
+    assert.equal(result.phase, 'down');
+
+    // UP frames to complete
+    counter.handleFrame(createDualArmFrame('up', 0.91, 'up', 0.89, 'apple-vision', 3000));
+    result = counter.handleFrame(createDualArmFrame('up', 0.88, 'up', 0.93, 'apple-vision', 3100));
+    assert.equal(result.count, 1);
+    assert.equal(result.phase, 'ready');
   });
 });
 
@@ -753,6 +862,37 @@ describe('ML Kit push-up - regression tests', () => {
     assert.equal(result.phase, 'waiting_for_body');
     assert.equal(result.isPoseReady, false);
   });
+
+  it('ML Kit no-arm immediately resets (no grace timeout)', () => {
+    // V1.7.1 fix: ML Kit should NOT have 1500ms grace timeout
+    const counter = createPushUpCounter();
+
+    // UP x2
+    counter.handleFrame(createPushUpFrame('left', 160, 0.95, 'mlkit', 1000));
+    counter.handleFrame(createPushUpFrame('left', 160, 0.95, 'mlkit', 1100));
+
+    // DOWN x2
+    counter.handleFrame(createPushUpFrame('left', 85, 0.95, 'mlkit', 2000));
+    counter.handleFrame(createPushUpFrame('left', 85, 0.95, 'mlkit', 2100));
+
+    // Should be in down phase
+    let result = counter.handleFrame(createPushUpFrame('left', 85, 0.95, 'mlkit', 2200));
+    assert.equal(result.phase, 'down');
+
+    // Next frame has no valid arm - should immediately reset
+    const noArmFrame: PoseFrame = {
+      timestampMs: 2300,
+      imageWidth: 300,
+      imageHeight: 640,
+      cameraFacing: 'front',
+      source: 'mlkit',
+      coordinateSpace: 'upright-top-left-unmirrored',
+      landmarks: [], // No landmarks
+    };
+    result = counter.handleFrame(noArmFrame);
+    assert.equal(result.phase, 'waiting_for_body');
+    assert.equal(result.isPoseReady, false);
+  });
 });
 
 // ============================================================
@@ -819,5 +959,93 @@ describe('push-up guidance text', () => {
     const result = evaluatePoseQuality(frame, { exerciseType: 'push_up' });
     assert.equal(result.issue, 'partial_body');
     assert.ok(result.guidance.includes('调整') || result.guidance.includes('确保'));
+  });
+});
+
+// ============================================================
+// ML KIT PUSH-UP GUIDANCE TESTS
+// ============================================================
+describe('ML Kit push-up guidance regression', () => {
+  it('ML Kit push-up returns push_up guidance (not squat guidance)', () => {
+    // V1.7.1 fix: ML Kit push-up should return push_up guidance, not squat
+    const frame: PoseFrame = {
+      timestampMs: 1000,
+      imageWidth: 300,
+      imageHeight: 640,
+      cameraFacing: 'front',
+      source: 'mlkit',
+      coordinateSpace: 'upright-top-left-unmirrored',
+      // Incomplete body for ML Kit - missing some required landmarks
+      landmarks: [
+        { name: 'leftShoulder', x: 100, y: 50, confidence: 0.95 },
+        { name: 'leftElbow', x: 100, y: 200, confidence: 0.95 },
+        { name: 'leftWrist', x: 100, y: 350, confidence: 0.95 },
+        { name: 'leftHip', x: 100, y: 250, confidence: 0.95 },
+        // Missing right arm
+      ],
+    };
+
+    const result = evaluatePoseQuality(frame, { exerciseType: 'push_up' });
+    assert.equal(result.issue, 'partial_body');
+    // Guidance should be about arms, not about squats/legs
+    assert.ok(!result.guidance.includes('深蹲'));
+    assert.ok(!result.guidance.includes('膝盖'));
+    assert.ok(!result.guidance.includes('脚踝'));
+  });
+
+  it('ML Kit push-up low_confidence guidance mentions arms', () => {
+    const frame: PoseFrame = {
+      timestampMs: 1000,
+      imageWidth: 300,
+      imageHeight: 640,
+      cameraFacing: 'front',
+      source: 'mlkit',
+      coordinateSpace: 'upright-top-left-unmirrored',
+      landmarks: [
+        { name: 'leftShoulder', x: 100, y: 50, confidence: 0.30 }, // Low confidence
+        { name: 'leftElbow', x: 100, y: 200, confidence: 0.30 },
+        { name: 'leftWrist', x: 100, y: 350, confidence: 0.30 },
+        { name: 'leftHip', x: 100, y: 250, confidence: 0.30 },
+        { name: 'rightShoulder', x: 200, y: 50, confidence: 0.30 },
+        { name: 'rightElbow', x: 200, y: 200, confidence: 0.30 },
+        { name: 'rightWrist', x: 200, y: 350, confidence: 0.30 },
+        { name: 'rightHip', x: 200, y: 250, confidence: 0.30 },
+      ],
+    };
+
+    const result = evaluatePoseQuality(frame, { exerciseType: 'push_up' });
+    assert.equal(result.issue, 'low_confidence');
+    // Should mention clarity for arms, not squat-related terms
+    assert.ok(result.guidance.includes('清晰') || result.guidance.includes('手臂'));
+    assert.ok(!result.guidance.includes('深蹲'));
+    assert.ok(!result.guidance.includes('膝盖'));
+    assert.ok(!result.guidance.includes('脚踝'));
+  });
+
+  it('Squat returns squat guidance (not push-up guidance)', () => {
+    const frame: PoseFrame = {
+      timestampMs: 1000,
+      imageWidth: 300,
+      imageHeight: 640,
+      cameraFacing: 'front',
+      source: 'mlkit',
+      coordinateSpace: 'upright-top-left-unmirrored',
+      landmarks: [
+        { name: 'leftShoulder', x: 100, y: 50, confidence: 0.30 },
+        { name: 'rightShoulder', x: 200, y: 50, confidence: 0.30 },
+        { name: 'leftHip', x: 100, y: 200, confidence: 0.30 },
+        { name: 'rightHip', x: 200, y: 200, confidence: 0.30 },
+        { name: 'leftKnee', x: 100, y: 350, confidence: 0.30 },
+        { name: 'rightKnee', x: 200, y: 350, confidence: 0.30 },
+        { name: 'leftAnkle', x: 100, y: 500, confidence: 0.30 },
+        { name: 'rightAnkle', x: 200, y: 500, confidence: 0.30 },
+      ],
+    };
+
+    const result = evaluatePoseQuality(frame, { exerciseType: 'squat' });
+    assert.equal(result.issue, 'low_confidence');
+    // Squat guidance should mention squat-related terms
+    assert.ok(!result.guidance.includes('手臂'));
+    assert.ok(!result.guidance.includes('俯卧撑'));
   });
 });

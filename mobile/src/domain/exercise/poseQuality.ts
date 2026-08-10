@@ -144,7 +144,7 @@ export function evaluatePoseQuality(
   }
 
   // Standard evaluation for squat and ML Kit push-up
-  return evaluateStandardQuality(frame, byName, requiredLandmarks, minConfidence);
+  return evaluateStandardQuality(frame, byName, requiredLandmarks, minConfidence, exerciseType);
 }
 
 /**
@@ -349,6 +349,7 @@ function evaluateStandardQuality(
   byName: Map<string, { x: number; y: number; confidence: number }>,
   requiredLandmarks: Array<string>,
   minConfidence: number,
+  exerciseType: string,
 ): PoseQualityResult {
   // Check for missing landmarks
   let visibleCount = 0;
@@ -378,7 +379,7 @@ function evaluateStandardQuality(
   if (hasMissing) {
     return {
       issue: 'partial_body',
-      guidance: getGuidance('partial_body', 'squat'),
+      guidance: getGuidance('partial_body', exerciseType),
       metrics: {
         visibleLandmarkCount: visibleCount,
         requiredLandmarkCount: requiredLandmarks.length,
@@ -391,7 +392,7 @@ function evaluateStandardQuality(
   if (hasLowConfidence) {
     return {
       issue: 'low_confidence',
-      guidance: getGuidance('low_confidence', 'squat'),
+      guidance: getGuidance('low_confidence', exerciseType),
       metrics: {
         visibleLandmarkCount: visibleCount,
         requiredLandmarkCount: requiredLandmarks.length,
@@ -410,7 +411,7 @@ function evaluateStandardQuality(
     if (pointsOutOfFrame) {
       return {
         issue: 'out_of_frame',
-        guidance: getGuidance('out_of_frame', 'squat'),
+        guidance: getGuidance('out_of_frame', exerciseType),
         metrics: {
           visibleLandmarkCount: visibleCount,
           requiredLandmarkCount: requiredLandmarks.length,
@@ -429,7 +430,7 @@ function evaluateStandardQuality(
     if (fillRatio > MAX_BODY_FILL_RATIO) {
       return {
         issue: 'too_close',
-        guidance: getGuidance('too_close', 'squat'),
+        guidance: getGuidance('too_close', exerciseType),
         metrics: {
           visibleLandmarkCount: visibleCount,
           requiredLandmarkCount: requiredLandmarks.length,
@@ -446,7 +447,7 @@ function evaluateStandardQuality(
     if (fillRatio < MIN_BODY_FILL_RATIO && !isAppleVisionSquat) {
       return {
         issue: 'too_far',
-        guidance: getGuidance('too_far', 'squat'),
+        guidance: getGuidance('too_far', exerciseType),
         metrics: {
           visibleLandmarkCount: visibleCount,
           requiredLandmarkCount: requiredLandmarks.length,
@@ -459,7 +460,7 @@ function evaluateStandardQuality(
     // All checks passed - return actual bodyFillRatio
     return {
       issue: 'ok',
-      guidance: getGuidance('ok', 'squat'),
+      guidance: getGuidance('ok', exerciseType),
       metrics: {
         visibleLandmarkCount: visibleCount,
         requiredLandmarkCount: requiredLandmarks.length,
@@ -472,7 +473,7 @@ function evaluateStandardQuality(
   // No image dimensions - all landmarks present with sufficient confidence
   return {
     issue: 'ok',
-    guidance: getGuidance('ok', 'squat'),
+    guidance: getGuidance('ok', exerciseType),
     metrics: {
       visibleLandmarkCount: visibleCount,
       requiredLandmarkCount: requiredLandmarks.length,
