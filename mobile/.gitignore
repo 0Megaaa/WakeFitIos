@@ -61,6 +61,9 @@ keystore.properties
 *.p12
 *.mobileprovision
 
+# Local Ad Config (contains sensitive API keys)
+config/ads.local.json
+
 # Android local environment
 **/local.properties
 

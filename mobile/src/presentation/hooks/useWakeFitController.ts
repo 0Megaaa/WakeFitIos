@@ -56,6 +56,10 @@ export type WakeFitControllerState = {
   poseQualityIssue: 'ok' | 'partial_body' | 'low_confidence' | 'out_of_frame' | 'too_close' | 'too_far';
   poseGuidance: string;
   nextFireAt: string | null;
+  /** Tracks whether initial pending alarm check has completed.
+   * This gates ad splash - ads only show after this is true.
+   */
+  initialPendingAlarmCheckComplete: boolean;
 };
 
 export type WakeFitControllerDebugState = {
@@ -304,6 +308,11 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
   const [poseQualityIssue, setPoseQualityIssue] = useState<'ok' | 'partial_body' | 'low_confidence' | 'out_of_frame' | 'too_close' | 'too_far'>('ok');
   const [poseGuidance, setPoseGuidance] = useState('');
   const [nextFireAt, setNextFireAt] = useState<string | null>(null);
+  /** Tracks whether initial pending alarm check has completed.
+   * This gates ad splash - ads only show after this is true.
+   * Set to true after first consumePendingNativeAlarm completes.
+   */
+  const [initialPendingAlarmCheckComplete, setInitialPendingAlarmCheckComplete] = useState(false);
 
   alarmRef.current = alarm;
 
@@ -425,6 +434,10 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
 
   const consumePendingNativeAlarm = useCallback(async () => {
     const launch = await consumePendingAlarmLaunch({ service: platform.pendingAlarmLaunchService });
+    // Mark initial pending alarm check as complete
+    // This gates ad splash - ads only show after this is true
+    setInitialPendingAlarmCheckComplete(true);
+
     if (!launch) {
       return;
     }
@@ -772,6 +785,7 @@ export function useWakeFitController(dependencies: WakeFitDependencies, isDebugT
     poseQualityIssue,
     poseGuidance,
     nextFireAt,
+    initialPendingAlarmCheckComplete,
   };
 
   const actions: WakeFitControllerActions = {

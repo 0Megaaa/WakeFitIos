@@ -640,6 +640,32 @@ export const wakeFitStyles = StyleSheet.create({
     fontWeight: '900',
     textAlign: 'center',
   },
+
+  // Ad-related styles
+  bannerAdContainer: {
+    minHeight: 50,
+    backgroundColor: palette.cardAlt,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  bannerAd: {
+    minHeight: 50,
+    width: '100%',
+  },
+  nativeAdContainer: {
+    minHeight: 180,
+    backgroundColor: palette.cardAlt,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  nativeAd: {
+    minHeight: 180,
+    width: '100%',
+  },
+  rewardedSection: {
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
 });
 
 export { palette };
