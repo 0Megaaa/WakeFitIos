@@ -1,12 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
 
-// Mock the require for config file testing
-// In a real test environment, we would mock the file system
+// Replicate the same pure config-resolution logic that app.config.ts uses.
+// We test the semantics without importing the actual config loader (which
+// depends on expo's ConfigContext), so these are isolated unit tests matching
+// repo's native node:test harness.
 
 describe('AdsConfig', () => {
   describe('not_configured state with blank config', () => {
     it('should be not_configured when all credentials are empty', () => {
-      // Simulate blank config check
       const config = {
         apiBaseUrl: '',
         matrixAppId: '',
@@ -20,11 +22,11 @@ describe('AdsConfig', () => {
         config.takuAppId.trim() !== '' &&
         config.takuAppKey.trim() !== '';
 
-      expect(isConfigured).toBe(false);
+      assert.strictEqual(isConfigured, false);
     });
 
     it('should use safe defaults when config is missing', () => {
-      const missingConfig = {};
+      const missingConfig = {} as Record<string, unknown>;
 
       const defaults = {
         apiBaseUrl: 'https://yx.youtoball.com/adlj',
@@ -46,28 +48,46 @@ describe('AdsConfig', () => {
       };
 
       const resolvedConfig = {
-        apiBaseUrl: (missingConfig as any).apiBaseUrl || defaults.apiBaseUrl,
-        matrixAppId: (missingConfig as any).matrixAppId || defaults.matrixAppId,
-        appName: (missingConfig as any).appName || defaults.appName,
-        takuAppId: (missingConfig as any).takuAppId || defaults.takuAppId,
-        takuAppKey: (missingConfig as any).takuAppKey || defaults.takuAppKey,
-        splashPlacementId: (missingConfig as any).splashPlacementId || defaults.splashPlacementId,
-        bannerPlacementId: (missingConfig as any).bannerPlacementId || defaults.bannerPlacementId,
-        nativePlacementId: (missingConfig as any).nativePlacementId || defaults.nativePlacementId,
-        interstitialPlacementId: (missingConfig as any).interstitialPlacementId || defaults.interstitialPlacementId,
-        rewardedPlacementId: (missingConfig as any).rewardedPlacementId || defaults.rewardedPlacementId,
+        apiBaseUrl: (missingConfig['apiBaseUrl'] as string) || defaults.apiBaseUrl,
+        matrixAppId: (missingConfig['matrixAppId'] as string) || defaults.matrixAppId,
+        appName: (missingConfig['appName'] as string) || defaults.appName,
+        takuAppId: (missingConfig['takuAppId'] as string) || defaults.takuAppId,
+        takuAppKey: (missingConfig['takuAppKey'] as string) || defaults.takuAppKey,
+        splashPlacementId:
+          (missingConfig['splashPlacementId'] as string) || defaults.splashPlacementId,
+        bannerPlacementId:
+          (missingConfig['bannerPlacementId'] as string) || defaults.bannerPlacementId,
+        nativePlacementId:
+          (missingConfig['nativePlacementId'] as string) || defaults.nativePlacementId,
+        interstitialPlacementId:
+          (missingConfig['interstitialPlacementId'] as string) ||
+          defaults.interstitialPlacementId,
+        rewardedPlacementId:
+          (missingConfig['rewardedPlacementId'] as string) || defaults.rewardedPlacementId,
         fallbackIntervals: {
-          bannerSeconds: (missingConfig as any).fallbackIntervals?.bannerSeconds || defaults.fallbackIntervals.bannerSeconds,
-          nativeSeconds: (missingConfig as any).fallbackIntervals?.nativeSeconds || defaults.fallbackIntervals.nativeSeconds,
-          interstitialSeconds: (missingConfig as any).fallbackIntervals?.interstitialSeconds || defaults.fallbackIntervals.interstitialSeconds,
-          rewardSeconds: (missingConfig as any).fallbackIntervals?.rewardSeconds || defaults.fallbackIntervals.rewardSeconds,
+          bannerSeconds:
+            (missingConfig['fallbackIntervals'] as Record<string, unknown>)?.['bannerSeconds']
+              ??
+              defaults.fallbackIntervals.bannerSeconds,
+          nativeSeconds:
+            (missingConfig['fallbackIntervals'] as Record<string, unknown>)?.['nativeSeconds']
+              ??
+              defaults.fallbackIntervals.nativeSeconds,
+          interstitialSeconds:
+            (missingConfig['fallbackIntervals'] as Record<string, unknown>)?.[
+              'interstitialSeconds'
+            ] ?? defaults.fallbackIntervals.interstitialSeconds,
+          rewardSeconds:
+            (missingConfig['fallbackIntervals'] as Record<string, unknown>)?.[
+              'rewardSeconds'
+            ] ?? defaults.fallbackIntervals.rewardSeconds,
         },
       };
 
-      expect(resolvedConfig.apiBaseUrl).toBe(defaults.apiBaseUrl);
-      expect(resolvedConfig.matrixAppId).toBe('');
-      expect(resolvedConfig.takuAppId).toBe('');
-      expect(resolvedConfig.takuAppKey).toBe('');
+      assert.strictEqual(resolvedConfig.apiBaseUrl, defaults.apiBaseUrl);
+      assert.strictEqual(resolvedConfig.matrixAppId, '');
+      assert.strictEqual(resolvedConfig.takuAppId, '');
+      assert.strictEqual(resolvedConfig.takuAppKey, '');
     });
   });
 
@@ -86,7 +106,7 @@ describe('AdsConfig', () => {
         config.takuAppId.trim() !== '' &&
         config.takuAppKey.trim() !== '';
 
-      expect(isConfigured).toBe(true);
+      assert.strictEqual(isConfigured, true);
     });
   });
 
@@ -107,8 +127,8 @@ describe('AdsConfig', () => {
         nativePlacementId: remoteConfig.nativePlacementId || localConfig.nativePlacementId,
       };
 
-      expect(merged.bannerPlacementId).toBe('remote_banner_id');
-      expect(merged.nativePlacementId).toBe('local_native_id');
+      assert.strictEqual(merged.bannerPlacementId, 'remote_banner_id');
+      assert.strictEqual(merged.nativePlacementId, 'local_native_id');
     });
 
     it('should use local fallback when remote is missing', () => {
@@ -123,26 +143,28 @@ describe('AdsConfig', () => {
       };
 
       const merged = {
-        interstitialPlacementId: remoteConfig.interstitialPlacementId || localConfig.interstitialPlacementId,
-        rewardedPlacementId: remoteConfig.rewardedPlacementId || localConfig.rewardedPlacementId,
+        interstitialPlacementId:
+          remoteConfig.interstitialPlacementId || localConfig.interstitialPlacementId,
+        rewardedPlacementId:
+          remoteConfig.rewardedPlacementId || localConfig.rewardedPlacementId,
       };
 
-      expect(merged.interstitialPlacementId).toBe('local_interstitial_id');
-      expect(merged.rewardedPlacementId).toBe('remote_rewarded_id');
+      assert.strictEqual(merged.interstitialPlacementId, 'local_interstitial_id');
+      assert.strictEqual(merged.rewardedPlacementId, 'remote_rewarded_id');
     });
   });
 
   describe('show_ad flag', () => {
     it('should disable ads when show_ad is 0', () => {
-      const showAd = 0;
+      const showAd: number = 0;
       const adsEnabled = showAd === 1;
-      expect(adsEnabled).toBe(false);
+      assert.strictEqual(adsEnabled, false);
     });
 
     it('should enable ads when show_ad is 1', () => {
-      const showAd = 1;
+      const showAd: number = 1;
       const adsEnabled = showAd === 1;
-      expect(adsEnabled).toBe(true);
+      assert.strictEqual(adsEnabled, true);
     });
   });
 
@@ -153,8 +175,9 @@ describe('AdsConfig', () => {
       const safeFallback = 30;
 
       invalidIntervals.forEach((interval) => {
-        const resolvedInterval = interval > 0 ? interval : safeFallback;
-        expect(resolvedInterval).toBe(safeFallback);
+        const resolvedInterval =
+          typeof interval === 'number' && interval > 0 ? interval : safeFallback;
+        assert.strictEqual(resolvedInterval, safeFallback);
       });
     });
 
@@ -163,85 +186,60 @@ describe('AdsConfig', () => {
       const safeFallback = 30;
 
       const resolvedInterval = validInterval > 0 ? validInterval : safeFallback;
-      expect(resolvedInterval).toBe(45);
+      assert.strictEqual(resolvedInterval, 45);
     });
   });
 });
 
-describe('WakeFitAds JS API', () => {
-  it('should export WakeFitAds module interface', async () => {
-    // Test that the module structure exists
-    // This is a structural test - actual implementation tested via native
-
-    const mockModule = {
-      start: async () => {},
-      getStatus: async () => ({
-        state: 'not_configured',
-        adsEnabled: false,
-        suppressed: false,
-        configLoaded: false,
-        sdkInitialized: false,
-        loggedIn: false,
-      }),
-      setSuppressed: async () => {},
-      showSplashOnce: async () => {},
-      startInterstitialLoop: async () => {},
-      stopInterstitialLoop: async () => {},
-      showRewarded: async () => false,
-      getRewardCooldownRemaining: async () => 0,
-    };
-
-    expect(typeof mockModule.start).toBe('function');
-    expect(typeof mockModule.getStatus).toBe('function');
-    expect(typeof mockModule.setSuppressed).toBe('function');
-    expect(typeof mockModule.showSplashOnce).toBe('function');
-    expect(typeof mockModule.startInterstitialLoop).toBe('function');
-    expect(typeof mockModule.stopInterstitialLoop).toBe('function');
-    expect(typeof mockModule.showRewarded).toBe('function');
-    expect(typeof mockModule.getRewardCooldownRemaining).toBe('function');
-  });
-});
-
 describe('Ad suppression logic', () => {
+  type MockState = {
+    flow: { id: string } | null;
+    snapshot: { status: string } | null;
+    initialPendingAlarmCheckComplete: boolean;
+  };
+
   it('should suppress ads during challenge', () => {
-    const mockState = {
+    const mockState: MockState = {
       flow: { id: 'challenge-1' },
       snapshot: { status: 'challenge' },
       initialPendingAlarmCheckComplete: true,
     };
 
-    const challengeActive = mockState.flow !== null && mockState.snapshot?.status !== 'idle';
+    const challengeActive =
+      mockState.flow !== null && mockState.snapshot?.status !== 'idle';
     const pendingAlarmNotChecked = !mockState.initialPendingAlarmCheckComplete;
     const shouldSuppress = challengeActive || pendingAlarmNotChecked;
 
-    expect(shouldSuppress).toBe(true);
+    assert.strictEqual(shouldSuppress, true);
   });
 
   it('should not suppress ads when alarm check is complete and no challenge', () => {
-    const mockState = {
+    const mockState: MockState = {
       flow: null,
       snapshot: null,
       initialPendingAlarmCheckComplete: true,
     };
 
-    const challengeActive = mockState.flow !== null && mockState.snapshot?.status !== 'idle';
+    const challengeActive =
+      mockState.flow !== null && mockState.snapshot?.status !== 'idle';
     const pendingAlarmNotChecked = !mockState.initialPendingAlarmCheckComplete;
     const shouldSuppress = challengeActive || pendingAlarmNotChecked;
 
-    expect(shouldSuppress).toBe(false);
+    assert.strictEqual(shouldSuppress, false);
   });
 
   it('should suppress ads when initial pending alarm check is not complete', () => {
-    const mockState = {
+    const mockState: MockState = {
       flow: null,
       snapshot: null,
       initialPendingAlarmCheckComplete: false,
     };
 
-    const challengeActive = mockState.flow !== null && mockState.snapshot?.status !== 'idle';
+    const challengeActive =
+      mockState.flow !== null && mockState.snapshot?.status !== 'idle';
     const pendingAlarmNotChecked = !mockState.initialPendingAlarmCheckComplete;
     const shouldSuppress = challengeActive || pendingAlarmNotChecked;
 
-    expect(shouldSuppress).toBe(true);
+    assert.strictEqual(shouldSuppress, true);
   });
 });

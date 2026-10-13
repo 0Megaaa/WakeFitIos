@@ -62,6 +62,7 @@ keystore.properties
 *.mobileprovision
 
 # Local Ad Config (contains sensitive API keys)
+!config/ads.example.json
 config/ads.local.json
 
 # Android local environment

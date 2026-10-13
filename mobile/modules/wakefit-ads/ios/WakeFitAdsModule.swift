@@ -77,7 +77,7 @@ public class WakeFitAdsModule: Module {
 import AnyThinkSDK
 #endif
 
-public class WakeFitAdsAdView: ConcreteViewShader,
+public class WakeFitAdsAdView: ExpoView,
   UIViewControllerTransitioningDelegate,
   UIGestureRecognizerDelegate {
   @objc public var adFormat: String = "banner" {
@@ -91,6 +91,14 @@ public class WakeFitAdsAdView: ConcreteViewShader,
   private var bannerView: UIView?
   private var nativeAdView: UIView?
   private var isLoaded = false
+
+  let onAvailabilityChange = EventDispatcher("onAvailabilityChange")
+  let onAdError = EventDispatcher("onAdError")
+
+  public required init(appContext: AppContext? = nil) {
+    super.init(appContext: appContext)
+    clipsToBounds = true
+  }
 
   public override func viewDidLoad() {
     super.viewDidLoad()
@@ -242,14 +250,14 @@ public class WakeFitAdsAdView: ConcreteViewShader,
   }
 
   private func sendAvailabilityChange(available: Bool) {
-    sendEvent("onAvailabilityChange", [
+    onAvailabilityChange([
       "available": available,
       "sceneID": sceneID
     ])
   }
 
   private func sendAdError(message: String) {
-    sendEvent("onAdError", [
+    onAdError([
       "message": message,
       "sceneID": sceneID
     ])

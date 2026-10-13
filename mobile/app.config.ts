@@ -1,6 +1,6 @@
-import { type ExpoConfig } from 'expo';
-
-import appJson from './app.json';
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import type { ConfigContext, ExpoConfig } from 'expo/config';
 
 export interface AdsLocalConfig {
   apiBaseUrl: string;
@@ -40,11 +40,15 @@ const DEFAULT_ADS_CONFIG: AdsLocalConfig = {
   },
 };
 
-function loadAdsLocalConfig(): AdsLocalConfig {
+function loadAdsLocalConfig(projectRoot: string): AdsLocalConfig {
+  const configPath = join(projectRoot, 'config', 'ads.local.json');
+  if (!existsSync(configPath)) {
+    return DEFAULT_ADS_CONFIG;
+  }
+
   try {
-    // Dynamic require for local config file
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const localConfig = require('./config/ads.local.json') as AdsLocalConfig;
+    const raw = readFileSync(configPath, 'utf-8');
+    const localConfig: AdsLocalConfig = JSON.parse(raw);
     return {
       apiBaseUrl: localConfig.apiBaseUrl || DEFAULT_ADS_CONFIG.apiBaseUrl,
       matrixAppId: localConfig.matrixAppId || '',
@@ -57,19 +61,29 @@ function loadAdsLocalConfig(): AdsLocalConfig {
       interstitialPlacementId: localConfig.interstitialPlacementId || '',
       rewardedPlacementId: localConfig.rewardedPlacementId || '',
       fallbackIntervals: {
-        bannerSeconds: localConfig.fallbackIntervals?.bannerSeconds || DEFAULT_ADS_CONFIG.fallbackIntervals.bannerSeconds,
-        nativeSeconds: localConfig.fallbackIntervals?.nativeSeconds || DEFAULT_ADS_CONFIG.fallbackIntervals.nativeSeconds,
-        interstitialSeconds: localConfig.fallbackIntervals?.interstitialSeconds || DEFAULT_ADS_CONFIG.fallbackIntervals.interstitialSeconds,
-        rewardSeconds: localConfig.fallbackIntervals?.rewardSeconds || DEFAULT_ADS_CONFIG.fallbackIntervals.rewardSeconds,
+        bannerSeconds:
+          localConfig.fallbackIntervals?.bannerSeconds ??
+          DEFAULT_ADS_CONFIG.fallbackIntervals.bannerSeconds,
+        nativeSeconds:
+          localConfig.fallbackIntervals?.nativeSeconds ??
+          DEFAULT_ADS_CONFIG.fallbackIntervals.nativeSeconds,
+        interstitialSeconds:
+          localConfig.fallbackIntervals?.interstitialSeconds ??
+          DEFAULT_ADS_CONFIG.fallbackIntervals.interstitialSeconds,
+        rewardSeconds:
+          localConfig.fallbackIntervals?.rewardSeconds ??
+          DEFAULT_ADS_CONFIG.fallbackIntervals.rewardSeconds,
       },
     };
   } catch {
-    // Config file not found or invalid, use defaults
+    // Config file invalid or unreadable, use defaults
     return DEFAULT_ADS_CONFIG;
   }
 }
 
-function buildInfoPlistKeys(adsConfig: AdsLocalConfig): Record<string, string | number> {
+function buildInfoPlistKeys(
+  adsConfig: AdsLocalConfig
+): Record<string, string | number> {
   return {
     WakeFitAdsAPIBaseURL: adsConfig.apiBaseUrl,
     WakeFitAdsMatrixAppID: adsConfig.matrixAppId,
@@ -83,31 +97,28 @@ function buildInfoPlistKeys(adsConfig: AdsLocalConfig): Record<string, string | 
     WakeFitRewardedPlacementID: adsConfig.rewardedPlacementId,
     WakeFitBannerFallbackInterval: adsConfig.fallbackIntervals.bannerSeconds,
     WakeFitNativeFallbackInterval: adsConfig.fallbackIntervals.nativeSeconds,
-    WakeFitInterstitialFallbackInterval: adsConfig.fallbackIntervals.interstitialSeconds,
-    WakeFitRewardFallbackInterval: adsConfig.fallbackIntervals.rewardSeconds,
+    WakeFitInterstitialFallbackInterval:
+      adsConfig.fallbackIntervals.interstitialSeconds,
+    WakeFitRewardFallbackInterval:
+      adsConfig.fallbackIntervals.rewardSeconds,
   };
 }
 
-function mergeConfigs(expoConfig: ExpoConfig): ExpoConfig {
-  const adsConfig = loadAdsLocalConfig();
+export default (
+  { config, projectRoot }: ConfigContext
+): ExpoConfig => {
+  const adsConfig = loadAdsLocalConfig(projectRoot ?? process.cwd());
   const infoPlistKeys = buildInfoPlistKeys(adsConfig);
 
-  // Merge with existing iOS config
-  const existingIos = expoConfig.ios || {};
-  const existingInfoPlist = existingIos.infoPlist || {};
-
+  // Merge ad keys into existing normalized ExpoConfig
   return {
-    ...expoConfig,
+    ...config,
     ios: {
-      ...existingIos,
+      ...config.ios,
       infoPlist: {
-        ...existingInfoPlist,
+        ...config.ios?.infoPlist,
         ...infoPlistKeys,
       },
     },
   };
-}
-
-const config: ExpoConfig = mergeConfigs(appJson);
-
-export default config;
+};

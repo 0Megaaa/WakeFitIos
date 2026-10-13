@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Platform, StyleSheet, View } from 'react-native';
 import {
-  requireNativeViewManager,
+  Platform,
+  StyleSheet,
+  View,
   type NativeSyntheticEvent,
   type ViewProps,
-} from 'expo-modules-core';
+} from 'react-native';
+import { requireNativeViewManager } from 'expo-modules-core';
 
 import type { AdAvailabilityEvent, AdErrorEvent, AdFormat } from './types';
 
@@ -28,7 +30,7 @@ function getNativeAdView(): React.ComponentType<NativeAdViewProps> | null {
   }
 
   try {
-    cachedNativeView = requireNativeViewManager('WakeFitAdsView') as React.ComponentType<NativeAdViewProps>;
+    cachedNativeView = requireNativeViewManager('WakeFitAds') as React.ComponentType<NativeAdViewProps>;
   } catch {
     cachedNativeView = null;
   }

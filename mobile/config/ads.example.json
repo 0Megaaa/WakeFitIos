@@ -1,0 +1,21 @@
+{
+  "apiBaseUrl": "https://yx.youtoball.com/adlj",
+  "matrixAppId": "",
+  "appName": "WakeFit",
+
+  "takuAppId": "",
+  "takuAppKey": "",
+
+  "splashPlacementId": "",
+  "bannerPlacementId": "",
+  "nativePlacementId": "",
+  "interstitialPlacementId": "",
+  "rewardedPlacementId": "",
+
+  "fallbackIntervals": {
+    "bannerSeconds": 30,
+    "nativeSeconds": 30,
+    "interstitialSeconds": 60,
+    "rewardSeconds": 60
+  }
+}

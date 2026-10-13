@@ -1,4 +1,5 @@
-import { NativeModules, Platform } from 'react-native';
+import { Platform } from 'react-native';
+import { requireOptionalNativeModule } from 'expo-modules-core';
 
 import type { AdsStatus, WakeFitAdsStatus } from './types';
 
@@ -15,14 +16,14 @@ interface WakeFitAdsModuleType {
 
 const MODULE_NAME = 'WakeFitAds';
 
-// Platform-safe native module loading
+// Platform-safe native module loading via Expo Modules API
 function getNativeModule(): WakeFitAdsModuleType | null {
   if (Platform.OS !== 'ios') {
     return null;
   }
 
   try {
-    return NativeModules[MODULE_NAME] as WakeFitAdsModuleType;
+    return requireOptionalNativeModule<WakeFitAdsModuleType>(MODULE_NAME);
   } catch {
     return null;
   }
