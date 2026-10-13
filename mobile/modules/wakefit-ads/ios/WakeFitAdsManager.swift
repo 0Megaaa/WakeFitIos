@@ -613,6 +613,10 @@ extension WakeFitAdsManager: ATAdLoadingDelegate {
 // MARK: - ATInterstitialDelegate
 
 extension WakeFitAdsManager: ATInterstitialDelegate {
+  public func interstitialDidShow(forPlacementID placementID: String, extra: [AnyHashable: Any]) {}
+
+  public func interstitialDidClick(forPlacementID placementID: String, extra: [AnyHashable: Any]) {}
+
   public func interstitialDidClose(forPlacementID placementID: String, extra: [AnyHashable: Any]) {
     print("WakeFitAds: Interstitial closed: \(placementID)")
     // Reload for next cycle
@@ -628,6 +632,12 @@ extension WakeFitAdsManager: ATInterstitialDelegate {
 // MARK: - ATRewardedVideoDelegate
 
 extension WakeFitAdsManager: ATRewardedVideoDelegate {
+  public func rewardedVideoDidStartPlaying(forPlacementID placementID: String, extra: [AnyHashable: Any]) {}
+
+  public func rewardedVideoDidEndPlaying(forPlacementID placementID: String, extra: [AnyHashable: Any]) {}
+
+  public func rewardedVideoDidClick(forPlacementID placementID: String, extra: [AnyHashable: Any]) {}
+
   public func rewardedVideoDidRewardSuccess(forPlacemenID placementID: String, extra: [AnyHashable: Any]) {
     print("WakeFitAds: Reward success for: \(placementID)")
 
@@ -648,6 +658,10 @@ extension WakeFitAdsManager: ATRewardedVideoDelegate {
 // MARK: - ATSplashDelegate
 
 extension WakeFitAdsManager: ATSplashDelegate {
+  public func splashDidShow(forPlacementID placementID: String, extra: [AnyHashable: Any]) {}
+
+  public func splashDidClick(forPlacementID placementID: String, extra: [AnyHashable: Any]) {}
+
   public func splashDidClose(forPlacementID placementID: String, extra: [AnyHashable: Any]) {
     print("WakeFitAds: Splash closed: \(placementID)")
   }
