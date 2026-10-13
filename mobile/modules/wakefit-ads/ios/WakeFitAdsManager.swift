@@ -299,7 +299,15 @@ public final class WakeFitAdsManager: NSObject {
 
   // MARK: - Splash
 
+  // `splashShownInSession` flips to true ONLY after the Taku runtime
+  // confirms a real `splashDidShow`. `splashPresentationInFlight` guards
+  // against a double call between `showSplashAd` and the runtime
+  // callback. `pendingSplashPlacementID` is set when we needed to load
+  // the splash first; it is cleared by every terminal splash callback
+  // (didShow / didShowFailed) AND by the suppressed branch of
+  // `didFinishLoadingAD`.
   private var splashShownInSession = false
+  private var splashPresentationInFlight = false
   private var pendingSplashPlacementID: String?
 
   // MARK: - Rewarded Continuation
@@ -317,15 +325,28 @@ public final class WakeFitAdsManager: NSObject {
 
   // MARK: - Start
 
-  /// Idempotent. Subsequent calls while a startup is in flight are no-ops.
-  public func start() {
-    if startupInFlight != nil {
+  /// Async and truly idempotent. Resolves only after the current startup
+  /// has reached a terminal state (`.ready`, `.disabled`, `.failed`,
+  /// `.notConfigured`). A second call while a startup is in flight awaits
+  /// the **same** task — never spawns a duplicate fetch / Taku init /
+  /// login / preload. Once the manager is `.ready` or `.disabled`,
+  /// `start()` is a hard no-op and does NOT re-initialize anything.
+  public func start() async {
+    if state == .ready || state == .disabled {
       return
     }
-    startupInFlight = Task { @MainActor [weak self] in
-      await self?.runStartup()
-      self?.startupInFlight = nil
+
+    if let task = startupInFlight {
+      await task.value
+      return
     }
+
+    let task = Task { @MainActor [weak self] in
+      await self?.runStartup()
+    }
+    startupInFlight = task
+    await task.value
+    startupInFlight = nil
   }
 
   private func runStartup() async {
@@ -443,16 +464,20 @@ public final class WakeFitAdsManager: NSObject {
       let decoder = JSONDecoder()
       var appConfig: WakeFitRemoteAppConfig?
 
-      // 1. Direct decode
-      if let decoded = try? decoder.decode(WakeFitRemoteAppConfig.self, from: response.data) {
-        appConfig = decoded
-      }
-
-      // 3. { "data": { ... } } wrapper
-      if appConfig == nil,
-         let wrapper = try? decoder.decode(WakeFitRemoteAppConfigWrapper.self, from: response.data),
+      // 1. { "data": { ... } } wrapper MUST be tried first. A direct decode
+      //    of the wrapped form also "succeeds" (every config field is
+      //    optional), which would short-circuit show_ad=1 detection. Trying
+      //    the wrapper first lets us correctly recover a wrapped response
+      //    without depending on a direct-decode throw.
+      if let wrapper = try? decoder.decode(WakeFitRemoteAppConfigWrapper.self, from: response.data),
          let inner = wrapper.data {
         appConfig = inner
+      }
+
+      // 2. Direct decode fallback for the unwrapped top-level form.
+      if appConfig == nil,
+         let decoded = try? decoder.decode(WakeFitRemoteAppConfig.self, from: response.data) {
+        appConfig = decoded
       }
 
       guard let resolved = appConfig else {
@@ -546,10 +571,19 @@ public final class WakeFitAdsManager: NSObject {
 
   // MARK: - Preload
 
+  /// All four display formats are preloaded before the manager reports
+  /// `.ready`. Skipping Native here means the first render in
+  /// `WakeFitAdsAdView` is always a "not ready, please load" path and the
+  /// native ad appears noticeably later than banner / interstitial /
+  /// rewarded. Preloading keeps the first impression in sync with the
+  /// remote config that was just fetched.
   private func preloadAds() {
     #if canImport(AnyThinkSDK)
     if !bannerPlacementId.isEmpty {
       loadBanner(placementID: bannerPlacementId)
+    }
+    if !nativePlacementId.isEmpty {
+      loadNative(placementID: nativePlacementId)
     }
     if !interstitialPlacementId.isEmpty {
       loadInterstitial(placementID: interstitialPlacementId)
@@ -557,8 +591,6 @@ public final class WakeFitAdsManager: NSObject {
     if !rewardedPlacementId.isEmpty {
       loadRewarded(placementID: rewardedPlacementId)
     }
-    // Native is rendered on-demand by the view itself; preload is unnecessary
-    // and the Taku SDK will fetch when the view requests it.
     #endif
   }
 
@@ -568,6 +600,17 @@ public final class WakeFitAdsManager: NSObject {
     var extra: [String: Any] = [
       kATAdLoadingExtraBannerAdSizeKey: NSValue(cgSize: CGSize(width: 320, height: 50)),
       kATExtraInfoAdSizeKey: NSValue(cgSize: CGSize(width: 320, height: 50))
+    ]
+    if let vc = findViewController() {
+      extra[kATAdLoadingExtraShowViewControllerKey] = vc
+    }
+    ATAdManager.shared().loadAD(withPlacementID: placementID, extra: extra, delegate: self)
+  }
+
+  private func loadNative(placementID: String) {
+    guard !placementID.isEmpty else { return }
+    var extra: [String: Any] = [
+      kATExtraInfoNativeAdSizeKey: NSValue(cgSize: CGSize(width: 320, height: 180))
     ]
     if let vc = findViewController() {
       extra[kATAdLoadingExtraShowViewControllerKey] = vc
@@ -609,18 +652,30 @@ public final class WakeFitAdsManager: NSObject {
       print("WakeFitAds: Splash already shown in this session")
       return
     }
+    guard !splashPresentationInFlight else {
+      print("WakeFitAds: Splash presentation already in flight")
+      return
+    }
+    guard pendingSplashPlacementID == nil else {
+      print("WakeFitAds: Splash load already pending")
+      return
+    }
     let placement = splashPlacementId
     guard !placement.isEmpty else {
       print("WakeFitAds: No splash placement configured")
       return
     }
 
-    splashShownInSession = true
-
+    // CRITICAL: do NOT set splashShownInSession here. The session-once
+    // contract is owned by the runtime callback (splashDidShow), so a
+    // failed load or a no-window show still leaves the session eligible
+    // for a retry.
     #if canImport(AnyThinkSDK)
     let manager = ATAdManager.shared()
     if manager.splashReady(forPlacementID: placement) {
-      showSplashAd(placementID: placement)
+      if showSplashAd(placementID: placement) {
+        splashPresentationInFlight = true
+      }
     } else {
       pendingSplashPlacementID = placement
       manager.loadAD(withPlacementID: placement, extra: [:], delegate: self, containerView: nil)
@@ -629,12 +684,19 @@ public final class WakeFitAdsManager: NSObject {
   }
 
   #if canImport(AnyThinkSDK)
-  private func showSplashAd(placementID: String) {
+  /// Returns true ONLY if a real `showSplash` was dispatched against a
+  /// key window + root view controller. Returns false (no state change)
+  /// when the app has no usable window yet — in that case neither
+  /// `splashShownInSession` nor `splashPresentationInFlight` are touched
+  /// and the caller is free to retry on a later RootScreen effect tick.
+  private func showSplashAd(placementID: String) -> Bool {
     guard let window = UIApplication.shared.connectedScenes
       .compactMap({ $0 as? UIWindowScene })
       .flatMap(\.windows)
       .first(where: { $0.isKeyWindow }),
-      let viewController = window.rootViewController else { return }
+      let viewController = window.rootViewController else {
+      return false
+    }
 
     let config = ATShowConfig(scene: nil, showCustomExt: nil)
     ATAdManager.shared().showSplash(
@@ -645,6 +707,7 @@ public final class WakeFitAdsManager: NSObject {
       extra: [:],
       delegate: self
     )
+    return true
   }
   #endif
 
@@ -1134,10 +1197,17 @@ extension WakeFitAdsManager: ATAdLoadingDelegate {
     print("WakeFitAds: Ad loaded: \(placementID)")
 
     if placementID == pendingSplashPlacementID {
+      // Always clear the pending marker so a subsequent safe-state call
+      // from RootScreen is not blocked by a stale load.
       pendingSplashPlacementID = nil
       if canPresentAds && !suppressed {
-        showSplashAd(placementID: placementID)
+        if showSplashAd(placementID: placementID) {
+          splashPresentationInFlight = true
+        }
       }
+      // suppressed branch: pending is already cleared, splashShownInSession
+      // stays false, splashPresentationInFlight stays false → RootScreen
+      // can retry once suppression lifts.
     }
   }
 
@@ -1146,6 +1216,7 @@ extension WakeFitAdsManager: ATAdLoadingDelegate {
 
     if placementID == pendingSplashPlacementID {
       pendingSplashPlacementID = nil
+      // splashShownInSession stays false → RootScreen can retry later.
     }
   }
 
@@ -1190,9 +1261,11 @@ extension WakeFitAdsManager: ATRewardedVideoDelegate {
     }
   }
 
-  public func rewardedVideoDidFail(toPlay placementID: String, error: Error, extra: [AnyHashable: Any]) {
+  public func rewardedVideoDidFailToPlay(forPlacementID placementID: String, error: Error, extra: [AnyHashable: Any]) {
     print("WakeFitAds: Rewarded failed to play: \(error)")
     guard placementID == pendingRewardedPlacement else { return }
+    // The JS Promise must never hang on a failed-to-play event. Resolve
+    // it false, clear pending state, and reload for the next attempt.
     resolvePendingRewarded(false)
     loadRewarded(placementID: placementID)
   }
@@ -1205,24 +1278,28 @@ extension WakeFitAdsManager: ATRewardedVideoDelegate {
     }
 
     let trulyRewarded = rewarded && pendingRewardedHasSuccess
-    let continuation = pendingRewardedContinuation
-    let placement = pendingRewardedPlacement
-
-    // Clear pending state eagerly so reload can fire immediately.
-    pendingRewardedContinuation = nil
-    pendingRewardedPlacement = nil
-    pendingRewardedSceneID = nil
-    pendingRewardedHasSuccess = false
 
     if !trulyRewarded {
-      continuation?.resume(returning: false)
-      if let placement { loadRewarded(placementID: placement) }
+      // Not a real reward: resolve immediately, clear pending state, reload.
+      resolvePendingRewarded(false)
+      loadRewarded(placementID: placementID)
       return
     }
 
-    // Genuine reward success path.
+    // Genuine reward success path. We MUST keep `pendingRewardedContinuation`
+    // set while `reportads -> reportask -> cooldown` runs, otherwise a
+    // second `showRewarded()` call would slip past the
+    // `pendingRewardedContinuation == nil` guard and race the backend
+    // chain. Only `resolvePendingRewarded(_:)` (called below after the
+    // chain finishes) is allowed to clear the pending state.
+    let continuation = pendingRewardedContinuation
+    let pendingPlacement = pendingRewardedPlacement
+
     Task { @MainActor [weak self] in
       guard let self else {
+        // Manager went away mid-chain; resolve false so the JS Promise
+        // does not hang. `pendingRewardedContinuation` is already nil
+        // here because it is held on `self`.
         continuation?.resume(returning: false)
         return
       }
@@ -1230,8 +1307,11 @@ extension WakeFitAdsManager: ATRewardedVideoDelegate {
       if success {
         self.rewardCooldownEndTime = Date().addingTimeInterval(TimeInterval(self.rewardInterval))
       }
-      continuation?.resume(returning: success)
-      if let placement { self.loadRewarded(placementID: placement) }
+      // Now (and only now) clear pending state + resume the JS Promise.
+      self.resolvePendingRewarded(success)
+      if let pendingPlacement {
+        self.loadRewarded(placementID: pendingPlacement)
+      }
     }
   }
 }
@@ -1239,7 +1319,14 @@ extension WakeFitAdsManager: ATRewardedVideoDelegate {
 // MARK: - ATSplashDelegate
 
 extension WakeFitAdsManager: ATSplashDelegate {
-  public func splashDidShow(forPlacementID placementID: String, extra: [AnyHashable: Any]) {}
+  public func splashDidShow(forPlacementID placementID: String, extra: [AnyHashable: Any]) {
+    // The runtime confirmed a real show. Lock the session-once contract
+    // and clear the in-flight guard so future re-tries from RootScreen
+    // are rejected.
+    pendingSplashPlacementID = nil
+    splashPresentationInFlight = false
+    splashShownInSession = true
+  }
 
   public func splashDidClick(forPlacementID placementID: String, extra: [AnyHashable: Any]) {}
 
@@ -1250,6 +1337,9 @@ extension WakeFitAdsManager: ATSplashDelegate {
   public func splashDidShowFailed(forPlacementID placementID: String, error: Error, extra: [AnyHashable: Any]) {
     print("WakeFitAds: Splash failed: \(error)")
     pendingSplashPlacementID = nil
+    splashPresentationInFlight = false
+    // splashShownInSession stays false so RootScreen can call
+    // showSplashOnce() again from a safe state.
   }
 }
 #endif

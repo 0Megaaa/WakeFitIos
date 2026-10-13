@@ -66,7 +66,10 @@ public class WakeFitAdsModule: Module {
 
   @MainActor
   private func startAds() async {
-    WakeFitAdsManager.shared.start()
+    // Block until the manager reaches a real terminal state (ready,
+    // disabled, failed, notConfigured) so the JS `await WakeFitAds.start()`
+    // resolves only after startup has finished.
+    await WakeFitAdsManager.shared.start()
   }
 
   @MainActor
@@ -342,6 +345,11 @@ public class WakeFitAdsAdView: ExpoView {
       return
     }
 
+    // Single configuration. The previous version created a second
+    // `ATNativeADConfiguration` for the renderer call, which produced two
+    // independent objects (one bound to the view, one passed to the
+    // renderer) and left the renderer unwired against the actual
+    // `nativeView` instance.
     let configuration = ATNativeADConfiguration()
     configuration.adFrame = bounds
     configuration.mediaViewFrame = bounds
@@ -356,30 +364,24 @@ public class WakeFitAdsAdView: ExpoView {
     )
     nativeView.delegate = self
 
-    // Per Taku SDK requirements, the offer MUST be told which view to render
-    // into. This wires up MediaView + ad choice + click handlers. Without
-    // it the native view stays blank.
-    let renderConfiguration = ATNativeADConfiguration()
-    renderConfiguration.adFrame = bounds
-    renderConfiguration.mediaViewFrame = bounds
-    renderConfiguration.rootViewController = findViewController()
-    renderConfiguration.delegate = self
-    renderConfiguration.sizeToFit = true
-
-    offer.renderer(
-      with: renderConfiguration,
-      selfRenderView: nil,
-      nativeADView: nativeView
-    )
-
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
       self.clearAd()
 
+      // 1. Mount the native view into the view hierarchy FIRST so the
+      //    Taku renderer can resolve MediaView / click / ad-choice
+      //    against a live UIView.
       nativeView.frame = self.bounds
       nativeView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
       self.addSubview(nativeView)
       self.nativeAdView = nativeView
+
+      // 2. THEN hand the offer + mounted view to the renderer.
+      offer.renderer(
+        with: configuration,
+        selfRenderView: nil,
+        nativeADView: nativeView
+      )
 
       self.isLoaded = true
       self.sendAvailabilityChange(available: true)
@@ -399,10 +401,14 @@ public class WakeFitAdsAdView: ExpoView {
 
   // MARK: - Cleanup
 
+  /// `clearAd()` is invoked from many paths, including mid-cycle
+  /// `renderBanner` / `renderNative`. It MUST NOT touch `refreshTimer`:
+  /// the timer is the responsibility of explicit lifecycle callers
+  /// (format/sceneID didSet, `handleDetach`, `handleSuppressionChange`
+  /// when suppression goes true, and `deinit`). If `clearAd()` killed
+  /// the timer, every successful render would immediately cancel the
+  /// next scheduled refresh.
   private func clearAd() {
-    refreshTimer?.invalidate()
-    refreshTimer = nil
-
     #if canImport(AnyThinkSDK)
     if let banner = bannerView as? ATBannerView {
       banner.destroyBanner()
