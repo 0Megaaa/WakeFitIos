@@ -341,8 +341,9 @@ public final class WakeFitAdsManager: NSObject {
       return
     }
 
-    let task = Task { @MainActor [weak self] in
-      await self?.runStartup()
+    let task = Task<Void, Never> { @MainActor [weak self] in
+      guard let self else { return }
+      await self.runStartup()
     }
     startupInFlight = task
     await task.value
