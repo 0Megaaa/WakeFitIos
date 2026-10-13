@@ -1,6 +1,10 @@
 import ExpoModulesCore
 import Foundation
 
+#if canImport(AnyThinkSDK)
+import AnyThinkSDK
+#endif
+
 public class WakeFitAdsModule: Module {
   public func definition() -> ModuleDefinition {
     Name("WakeFitAds")
@@ -62,7 +66,7 @@ public class WakeFitAdsModule: Module {
 
   @MainActor
   private func startAds() async {
-    await WakeFitAdsManager.shared.start()
+    WakeFitAdsManager.shared.start()
   }
 
   @MainActor
@@ -73,47 +77,135 @@ public class WakeFitAdsModule: Module {
 
 // MARK: - Native Ad View
 
-#if canImport(AnyThinkSDK)
-import AnyThinkSDK
-#endif
-
-public class WakeFitAdsAdView: ExpoView,
-  UIViewControllerTransitioningDelegate,
-  UIGestureRecognizerDelegate {
+public class WakeFitAdsAdView: ExpoView {
   @objc public var adFormat: String = "banner" {
-    didSet { updateAd() }
+    didSet {
+      if oldValue != adFormat {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+        clearAd()
+        updateAd()
+      }
+    }
   }
 
   @objc public var sceneID: String = "default" {
-    didSet { updateAd() }
+    didSet {
+      if oldValue != sceneID {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+        clearAd()
+        updateAd()
+      }
+    }
   }
+
+  // MARK: - Banner/Native storage
 
   private var bannerView: UIView?
   private var nativeAdView: UIView?
   private var isLoaded = false
+  private var hasWindow = false
+
+  // MARK: - Refresh timer (managed on MainActor)
+
+  private var refreshTimer: Timer?
+
+  // MARK: - Event dispatchers
 
   let onAvailabilityChange = EventDispatcher()
   let onAdError = EventDispatcher()
 
+  // MARK: - State observer
+
+  private var stateObserver: NSObjectProtocol?
+
   public required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
     clipsToBounds = true
+    registerStateObserver()
   }
 
-  private func updateAd() {
-    guard !adFormat.isEmpty, !sceneID.isEmpty else { return }
+  deinit {
+    refreshTimer?.invalidate()
+    refreshTimer = nil
+    if let observer = stateObserver {
+      NotificationCenter.default.removeObserver(observer)
+    }
+  }
 
-    // Clear existing ad view
-    clearAd()
+  // MARK: - Lifecycle
 
-    // Check if ad should be shown
+  public override func didMoveToWindow() {
+    super.didMoveToWindow()
+
+    let nowInWindow = (window != nil)
+    if nowInWindow == hasWindow { return }
+    hasWindow = nowInWindow
+
+    if nowInWindow {
+      handleAttach()
+    } else {
+      handleDetach()
+    }
+  }
+
+  private func handleAttach() {
     let manager = WakeFitAdsManager.shared
-    guard manager.adsEnabled, !manager.suppressed else {
+    guard manager.canPresentAds && !manager.suppressed else {
+      sendAvailabilityChange(available: false)
+      return
+    }
+    updateAd()
+    scheduleRefresh()
+  }
+
+  private func handleDetach() {
+    refreshTimer?.invalidate()
+    refreshTimer = nil
+    clearAd()
+    sendAvailabilityChange(available: false)
+  }
+
+  private func handleSuppressionChange() {
+    let manager = WakeFitAdsManager.shared
+    if manager.suppressed {
+      refreshTimer?.invalidate()
+      refreshTimer = nil
+      clearAd()
       sendAvailabilityChange(available: false)
       return
     }
 
-    // Get placement ID based on format
+    // suppression lifted
+    guard hasWindow, manager.canPresentAds else { return }
+    updateAd()
+    scheduleRefresh()
+  }
+
+  private func registerStateObserver() {
+    stateObserver = NotificationCenter.default.addObserver(
+      forName: .wakeFitAdsStateChanged,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.handleSuppressionChange()
+    }
+  }
+
+  // MARK: - Update / Render
+
+  private func updateAd() {
+    guard !adFormat.isEmpty, !sceneID.isEmpty else { return }
+
+    clearAd()
+
+    let manager = WakeFitAdsManager.shared
+    guard manager.canPresentAds, !manager.suppressed else {
+      sendAvailabilityChange(available: false)
+      return
+    }
+
     let placementID: String
     switch adFormat {
     case "banner":
@@ -121,7 +213,8 @@ public class WakeFitAdsAdView: ExpoView,
     case "native":
       placementID = manager.nativePlacementId
     default:
-      placementID = ""
+      sendAvailabilityChange(available: false)
+      return
     }
 
     guard !placementID.isEmpty else {
@@ -129,7 +222,6 @@ public class WakeFitAdsAdView: ExpoView,
       return
     }
 
-    // Check if ad is ready and render
     #if canImport(AnyThinkSDK)
     let adManager = ATAdManager.shared()
 
@@ -156,10 +248,52 @@ public class WakeFitAdsAdView: ExpoView,
     #endif
   }
 
+  // MARK: - Refresh
+
+  private func scheduleRefresh() {
+    refreshTimer?.invalidate()
+    let interval: Int
+    switch adFormat {
+    case "banner":
+      interval = max(1, WakeFitAdsManager.shared.bannerInterval)
+    case "native":
+      interval = max(1, WakeFitAdsManager.shared.nativeInterval)
+    default:
+      return
+    }
+
+    let timer = Timer.scheduledTimer(
+      withTimeInterval: TimeInterval(interval),
+      repeats: false
+    ) { [weak self] _ in
+      Task { @MainActor in
+        self?.handleRefreshTick()
+      }
+    }
+    refreshTimer = timer
+  }
+
+  private func handleRefreshTick() {
+    guard hasWindow else {
+      refreshTimer = nil
+      return
+    }
+    let manager = WakeFitAdsManager.shared
+    guard manager.canPresentAds, !manager.suppressed else {
+      refreshTimer = nil
+      return
+    }
+    // One-shot refresh: re-render + schedule next.
+    updateAd()
+    scheduleRefresh()
+  }
+
+  // MARK: - Banner
+
   #if canImport(AnyThinkSDK)
   private func renderBanner(placementID: String) {
     let config = ATShowConfig(scene: sceneID, showCustomExt: nil)
-    guard let bannerView = ATAdManager.shared().retrieveBannerView(
+    guard let banner = ATAdManager.shared().retrieveBannerView(
       forPlacementID: placementID,
       config: config
     ) else {
@@ -167,17 +301,17 @@ public class WakeFitAdsAdView: ExpoView,
       return
     }
 
-    bannerView.delegate = self
-    bannerView.presentingViewController = findViewController()
+    banner.delegate = self
+    banner.presentingViewController = findViewController()
 
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
       self.clearAd()
 
-      bannerView.frame = self.bounds
-      bannerView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-      self.addSubview(bannerView)
-      self.bannerView = bannerView
+      banner.frame = self.bounds
+      banner.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+      self.addSubview(banner)
+      self.bannerView = banner
 
       self.isLoaded = true
       self.sendAvailabilityChange(available: true)
@@ -185,16 +319,25 @@ public class WakeFitAdsAdView: ExpoView,
   }
 
   private func loadAndRenderBanner(placementID: String) {
-    let extra: [String: Any] = [
+    var extra: [String: Any] = [
       kATAdLoadingExtraBannerAdSizeKey: NSValue(cgSize: CGSize(width: bounds.width > 0 ? bounds.width : 320, height: 50)),
       kATExtraInfoAdSizeKey: NSValue(cgSize: CGSize(width: bounds.width > 0 ? bounds.width : 320, height: 50))
     ]
-
+    if let vc = findViewController() {
+      extra[kATAdLoadingExtraShowViewControllerKey] = vc
+    }
     ATAdManager.shared().loadAD(withPlacementID: placementID, extra: extra, delegate: self)
   }
+  #endif
 
+  // MARK: - Native
+
+  #if canImport(AnyThinkSDK)
   private func renderNative(placementID: String) {
-    guard let offer = ATAdManager.shared().getNativeAdOffer(withPlacementID: placementID, scene: sceneID) else {
+    guard let offer = ATAdManager.shared().getNativeAdOffer(
+      withPlacementID: placementID,
+      scene: sceneID
+    ) else {
       sendAvailabilityChange(available: false)
       return
     }
@@ -213,6 +356,22 @@ public class WakeFitAdsAdView: ExpoView,
     )
     nativeView.delegate = self
 
+    // Per Taku SDK requirements, the offer MUST be told which view to render
+    // into. This wires up MediaView + ad choice + click handlers. Without
+    // it the native view stays blank.
+    let renderConfiguration = ATNativeADConfiguration()
+    renderConfiguration.adFrame = bounds
+    renderConfiguration.mediaViewFrame = bounds
+    renderConfiguration.rootViewController = findViewController()
+    renderConfiguration.delegate = self
+    renderConfiguration.sizeToFit = true
+
+    offer.renderer(
+      with: renderConfiguration,
+      selfRenderView: nil,
+      nativeADView: nativeView
+    )
+
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
       self.clearAd()
@@ -228,18 +387,34 @@ public class WakeFitAdsAdView: ExpoView,
   }
 
   private func loadAndRenderNative(placementID: String) {
-    let extra: [String: Any] = [
+    var extra: [String: Any] = [
       kATExtraInfoNativeAdSizeKey: NSValue(cgSize: CGSize(width: bounds.width > 0 ? bounds.width : 320, height: 180))
     ]
-
+    if let vc = findViewController() {
+      extra[kATAdLoadingExtraShowViewControllerKey] = vc
+    }
     ATAdManager.shared().loadAD(withPlacementID: placementID, extra: extra, delegate: self)
   }
   #endif
 
+  // MARK: - Cleanup
+
   private func clearAd() {
+    refreshTimer?.invalidate()
+    refreshTimer = nil
+
+    #if canImport(AnyThinkSDK)
+    if let banner = bannerView as? ATBannerView {
+      banner.destroyBanner()
+    }
+    if let native = nativeAdView as? ATNativeADView {
+      native.destroyNative()
+    }
+    #endif
+
     bannerView?.removeFromSuperview()
-    bannerView = nil
     nativeAdView?.removeFromSuperview()
+    bannerView = nil
     nativeAdView = nil
     isLoaded = false
   }
@@ -272,7 +447,6 @@ public class WakeFitAdsAdView: ExpoView,
   public override func layoutSubviews() {
     super.layoutSubviews()
 
-    // Resize ad views when view size changes
     bannerView?.frame = bounds
     nativeAdView?.frame = bounds
   }
@@ -309,7 +483,6 @@ extension WakeFitAdsAdView: ATNativeADDelegate {
 
 extension WakeFitAdsAdView: ATAdLoadingDelegate {
   public func didFinishLoadingAD(withPlacementID placementID: String) {
-    // Re-trigger render
     DispatchQueue.main.async { [weak self] in
       self?.updateAd()
     }

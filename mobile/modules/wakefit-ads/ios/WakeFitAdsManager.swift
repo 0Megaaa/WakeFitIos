@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import UIKit
 
 #if canImport(AnyThinkSDK)
@@ -7,6 +8,13 @@ import AnyThinkSDK
 
 // MARK: - Remote Config Models
 
+/// Matrix `/api/index/appconfig` payload.
+///
+/// Contract fields:
+/// - placements: snake_case `*_placementid`
+/// - global: snake_case `app_name`, `show_ad`
+/// - intervals: **camelCase** (`bannerAdInterval`, `nativeAdInterval`,
+///   `interstitialAdInterval`, `rewardAdInterval`).
 public struct WakeFitRemoteAppConfig: Codable {
   public let id: Int?
   public let appName: String?
@@ -27,18 +35,48 @@ public struct WakeFitRemoteAppConfig: Codable {
     case nativePlacementId = "native_placementid"
     case interstitialPlacementId = "interstitial_placementid"
     case rewardedPlacementId = "rewarded_placementid"
-    case bannerAdInterval = "banner_ad_interval"
-    case nativeAdInterval = "native_ad_interval"
-    case interstitialAdInterval = "interstitial_ad_interval"
-    case rewardAdInterval = "reward_ad_interval"
+    case bannerAdInterval = "bannerAdInterval"
+    case nativeAdInterval = "nativeAdInterval"
+    case interstitialAdInterval = "interstitialAdInterval"
+    case rewardAdInterval = "rewardAdInterval"
     case showAd = "show_ad"
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.id = WakeFitJSONValue.int(from: container, .id)
+    self.appName = try? container.decode(String.self, forKey: .appName)
+    self.bannerPlacementId = try? container.decode(String.self, forKey: .bannerPlacementId)
+    self.nativePlacementId = try? container.decode(String.self, forKey: .nativePlacementId)
+    self.interstitialPlacementId = try? container.decode(String.self, forKey: .interstitialPlacementId)
+    self.rewardedPlacementId = try? container.decode(String.self, forKey: .rewardedPlacementId)
+    self.bannerAdInterval = WakeFitJSONValue.int(from: container, .bannerAdInterval)
+    self.nativeAdInterval = WakeFitJSONValue.int(from: container, .nativeAdInterval)
+    self.interstitialAdInterval = WakeFitJSONValue.int(from: container, .interstitialAdInterval)
+    self.rewardAdInterval = WakeFitJSONValue.int(from: container, .rewardAdInterval)
+    self.showAd = WakeFitJSONValue.int(from: container, .showAd)
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encodeIfPresent(id, forKey: .id)
+    try container.encodeIfPresent(appName, forKey: .appName)
+    try container.encodeIfPresent(bannerPlacementId, forKey: .bannerPlacementId)
+    try container.encodeIfPresent(nativePlacementId, forKey: .nativePlacementId)
+    try container.encodeIfPresent(interstitialPlacementId, forKey: .interstitialPlacementId)
+    try container.encodeIfPresent(rewardedPlacementId, forKey: .rewardedPlacementId)
+    try container.encodeIfPresent(bannerAdInterval, forKey: .bannerAdInterval)
+    try container.encodeIfPresent(nativeAdInterval, forKey: .nativeAdInterval)
+    try container.encodeIfPresent(interstitialAdInterval, forKey: .interstitialAdInterval)
+    try container.encodeIfPresent(rewardAdInterval, forKey: .rewardAdInterval)
+    try container.encodeIfPresent(showAd, forKey: .showAd)
   }
 }
 
 // MARK: - Login Response
 
 public struct WakeFitLoginResponse: Codable {
-  public let code: Int?
+  public let code: WakeFitBusinessCode?
   public let message: String?
   public let data: WakeFitLoginData?
 
@@ -57,6 +95,105 @@ public struct WakeFitLoginData: Codable {
   }
 }
 
+// MARK: - JSON Helpers
+
+/// Read an int field that may be encoded as JSON number or numeric string.
+enum WakeFitJSONValue {
+  static func int(from container: KeyedDecodingContainer<WakeFitRemoteAppConfig.CodingKeys>,
+                  _ key: WakeFitRemoteAppConfig.CodingKeys) -> Int? {
+    if let n = try? container.decode(Int.self, forKey: key) {
+      return n
+    }
+    if let s = try? container.decode(String.self, forKey: key), let n = Int(s) {
+      return n
+    }
+    return nil
+  }
+}
+
+/// Business code accepted as either JSON number or numeric string.
+public enum WakeFitBusinessCode: Codable, Equatable {
+  case number(Int)
+  case string(String)
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    if let n = try? container.decode(Int.self) {
+      self = .number(n)
+    } else if let s = try? container.decode(String.self) {
+      self = .string(s)
+    } else {
+      throw DecodingError.dataCorruptedError(in: container, debugDescription: "code is not a number or numeric string")
+    }
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.singleValueContainer()
+    switch self {
+    case .number(let n):
+      try container.encode(n)
+    case .string(let s):
+      try container.encode(s)
+    }
+  }
+
+  public var intValue: Int? {
+    switch self {
+    case .number(let n):
+      return n
+    case .string(let s):
+      return Int(s)
+    }
+  }
+
+  public var isSuccess: Bool {
+    return intValue == 1
+  }
+
+  public var isUnauthorized: Bool {
+    return intValue == 401
+  }
+}
+
+/// Tiny helper that pulls a `code` field out of arbitrary JSON and checks
+/// whether the response should be treated as a business success.
+enum WakeFitBusinessResult {
+  static func isSuccess(data: Data) -> Bool {
+    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+      return false
+    }
+    return matchesSuccess(json["code"])
+  }
+
+  static func isUnauthorized(data: Data) -> Bool {
+    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+      return false
+    }
+    return matchesUnauthorized(json["code"])
+  }
+
+  private static func matchesSuccess(_ raw: Any?) -> Bool {
+    if let n = raw as? Int { return n == 1 }
+    if let s = raw as? String { return s == "1" }
+    return false
+  }
+
+  private static func matchesUnauthorized(_ raw: Any?) -> Bool {
+    if let n = raw as? Int { return n == 401 }
+    if let s = raw as? String { return s == "401" }
+    return false
+  }
+}
+
+// MARK: - Notifications
+
+public extension Notification.Name {
+  /// Posted whenever the manager's readiness or suppression flips. Mounted ad
+  /// views listen for this and proactively clear or restart themselves so they
+  /// never leak an ad into a suppressed state.
+  static let wakeFitAdsStateChanged = Notification.Name("WakeFitAdsStateChanged")
+}
+
 // MARK: - Ad Manager
 
 @MainActor
@@ -72,54 +209,84 @@ public final class WakeFitAdsManager: NSObject {
   public private(set) var adsEnabled = false
   public private(set) var suppressed = false
 
+  /// True only when the manager is fully ready and may present ads.
+  /// Final gate for every show/render path.
+  public var canPresentAds: Bool {
+    return state == .ready
+      && adsEnabled
+      && sdkInitialized
+      && loggedIn
+  }
+
   // MARK: - Remote Config
 
   private var remoteConfig: WakeFitRemoteAppConfig?
   private var token: String?
-  private var hasRetriedWithNewToken = false
 
   // MARK: - Intervals
 
-  public var bannerInterval: Int { remoteConfig?.bannerAdInterval ?? WakeFitAdsConfig.shared.values.bannerFallbackInterval }
-  public var nativeInterval: Int { remoteConfig?.nativeAdInterval ?? WakeFitAdsConfig.shared.values.nativeFallbackInterval }
-  public var interstitialInterval: Int { remoteConfig?.interstitialAdInterval ?? WakeFitAdsConfig.shared.values.interstitialFallbackInterval }
-  public var rewardInterval: Int { remoteConfig?.rewardAdInterval ?? WakeFitAdsConfig.shared.values.rewardFallbackInterval }
+  public var bannerInterval: Int {
+    if let n = remoteConfig?.bannerAdInterval, n > 0 { return n }
+    return WakeFitAdsConfig.shared.values.bannerFallbackInterval
+  }
+  public var nativeInterval: Int {
+    if let n = remoteConfig?.nativeAdInterval, n > 0 { return n }
+    return WakeFitAdsConfig.shared.values.nativeFallbackInterval
+  }
+  public var interstitialInterval: Int {
+    if let n = remoteConfig?.interstitialAdInterval, n > 0 { return n }
+    return WakeFitAdsConfig.shared.values.interstitialFallbackInterval
+  }
+  public var rewardInterval: Int {
+    if let n = remoteConfig?.rewardAdInterval, n > 0 { return n }
+    return WakeFitAdsConfig.shared.values.rewardFallbackInterval
+  }
 
-  // MARK: - Placements (with remote override)
+  // MARK: - Placements
 
+  /// Splash placement comes exclusively from local config. Matrix never
+  /// supplies a splash placement; falling back to the banner placement is
+  /// incorrect.
   public var splashPlacementId: String {
-    remoteConfig?.bannerPlacementId?.isEmpty == false
-      ? remoteConfig!.bannerPlacementId!
-      : WakeFitAdsConfig.shared.values.splashPlacementId
+    return WakeFitAdsConfig.shared.values.splashPlacementId
   }
 
   public var bannerPlacementId: String {
-    remoteConfig?.bannerPlacementId?.isEmpty == false
-      ? remoteConfig!.bannerPlacementId!
-      : WakeFitAdsConfig.shared.values.bannerPlacementId
+    if let v = remoteConfig?.bannerPlacementId, !v.isEmpty { return v }
+    return WakeFitAdsConfig.shared.values.bannerPlacementId
   }
 
   public var nativePlacementId: String {
-    remoteConfig?.nativePlacementId?.isEmpty == false
-      ? remoteConfig!.nativePlacementId!
-      : WakeFitAdsConfig.shared.values.nativePlacementId
+    if let v = remoteConfig?.nativePlacementId, !v.isEmpty { return v }
+    return WakeFitAdsConfig.shared.values.nativePlacementId
   }
 
   public var interstitialPlacementId: String {
-    remoteConfig?.interstitialPlacementId?.isEmpty == false
-      ? remoteConfig!.interstitialPlacementId!
-      : WakeFitAdsConfig.shared.values.interstitialPlacementId
+    if let v = remoteConfig?.interstitialPlacementId, !v.isEmpty { return v }
+    return WakeFitAdsConfig.shared.values.interstitialPlacementId
   }
 
   public var rewardedPlacementId: String {
-    remoteConfig?.rewardedPlacementId?.isEmpty == false
-      ? remoteConfig!.rewardedPlacementId!
-      : WakeFitAdsConfig.shared.values.rewardedPlacementId
+    if let v = remoteConfig?.rewardedPlacementId, !v.isEmpty { return v }
+    return WakeFitAdsConfig.shared.values.rewardedPlacementId
+  }
+
+  /// Resolved app name used for backend payloads. Prefers remote non-empty.
+  public var effectiveAppName: String {
+    if let v = remoteConfig?.appName, !v.isEmpty { return v }
+    return WakeFitAdsConfig.shared.values.appName
   }
 
   // MARK: - HTTP Client
 
   private let httpClient = WakeFitAdsHTTPClient()
+
+  // MARK: - Network Gate
+
+  private var pathMonitor: NWPathMonitor?
+  private var pathMonitorQueue = DispatchQueue(label: "com.wakefit.ads.network")
+  private var networkContinuation: CheckedContinuation<Bool, Never>?
+  private var startupInFlight: Task<Void, Never>?
 
   // MARK: - Interstitial Loop
 
@@ -135,6 +302,13 @@ public final class WakeFitAdsManager: NSObject {
   private var splashShownInSession = false
   private var pendingSplashPlacementID: String?
 
+  // MARK: - Rewarded Continuation
+
+  private var pendingRewardedContinuation: CheckedContinuation<Bool, Never>?
+  private var pendingRewardedPlacement: String?
+  private var pendingRewardedSceneID: String?
+  private var pendingRewardedHasSuccess: Bool = false
+
   // MARK: - Initialization
 
   private override init() {
@@ -143,10 +317,21 @@ public final class WakeFitAdsManager: NSObject {
 
   // MARK: - Start
 
-  public func start() async {
-    let config = WakeFitAdsConfig.shared
+  /// Idempotent. Subsequent calls while a startup is in flight are no-ops.
+  public func start() {
+    if startupInFlight != nil {
+      return
+    }
+    startupInFlight = Task { @MainActor [weak self] in
+      await self?.runStartup()
+      self?.startupInFlight = nil
+    }
+  }
 
-    guard config.values.isBootstrapConfigured else {
+  private func runStartup() async {
+    let config = WakeFitAdsConfig.shared.values
+
+    guard config.isBootstrapConfigured else {
       state = .notConfigured
       print("WakeFitAds: Not configured - missing bootstrap config")
       return
@@ -155,77 +340,140 @@ public final class WakeFitAdsManager: NSObject {
     state = .starting
     print("WakeFitAds: Starting...")
 
-    // Fetch remote config
-    await fetchRemoteConfig()
+    // 1. wait for network
+    let networkOK = await waitForNetworkAvailability()
+    guard networkOK else {
+      state = .failed
+      print("WakeFitAds: Network unavailable, marking failed")
+      return
+    }
 
-    // Initialize Taku SDK
-    await initializeTaku()
+    // 2. fetch appconfig
+    let configResult = await fetchRemoteConfig()
+    guard configResult else {
+      state = .failed
+      print("WakeFitAds: Appconfig unavailable, marking failed")
+      notifyStateChanged()
+      return
+    }
 
-    // Device login
-    await deviceLogin()
+    // 3. show_ad gate
+    guard adsEnabled else {
+      state = .disabled
+      print("WakeFitAds: Disabled by remote show_ad")
+      notifyStateChanged()
+      return
+    }
 
-    // Preload ads
+    // 4. Taku initialize
+    let takuOK = await initializeTaku()
+    guard takuOK else {
+      state = .failed
+      print("WakeFitAds: Taku initialize failed")
+      notifyStateChanged()
+      return
+    }
+
+    // 5. device login
+    let loginOK = await deviceLogin()
+    guard loginOK else {
+      state = .failed
+      print("WakeFitAds: Device login failed")
+      notifyStateChanged()
+      return
+    }
+
+    // 6. preload
     preloadAds()
 
-    // Check final state
-    if adsEnabled && sdkInitialized && loggedIn {
-      state = .ready
-      print("WakeFitAds: Ready")
-    } else if !adsEnabled {
-      state = .disabled
-      print("WakeFitAds: Disabled by remote config")
-    } else {
-      state = .failed
-      print("WakeFitAds: Failed to initialize")
+    // 7. ready
+    state = .ready
+    print("WakeFitAds: Ready")
+    notifyStateChanged()
+  }
+
+  // MARK: - Network Gate
+
+  private func waitForNetworkAvailability() async -> Bool {
+    return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+      let monitor = NWPathMonitor()
+      self.pathMonitor = monitor
+      self.networkContinuation = continuation
+
+      monitor.pathUpdateHandler = { [weak self] path in
+        DispatchQueue.main.async {
+          guard let self else { return }
+          if path.status == .satisfied {
+            self.pathMonitor?.cancel()
+            self.pathMonitor = nil
+            let cont = self.networkContinuation
+            self.networkContinuation = nil
+            cont?.resume(returning: true)
+          }
+        }
+      }
+      monitor.start(queue: pathMonitorQueue)
     }
   }
 
   // MARK: - Remote Config
 
-  private func fetchRemoteConfig() async {
+  private func fetchRemoteConfig() async -> Bool {
     let config = WakeFitAdsConfig.shared.values
 
     guard !config.matrixAppId.isEmpty, !config.apiBaseUrl.isEmpty else {
       print("WakeFitAds: No Matrix App ID or API Base URL configured")
-      return
+      return false
     }
 
     guard let baseURL = URL(string: config.apiBaseUrl) else {
       print("WakeFitAds: Invalid API Base URL")
-      return
+      return false
     }
 
     let url = baseURL.appendingPathComponent("api/index/appconfig")
-    var components = URLComponents(url: url, resolvingAgainstBaseURL: true)
-    components?.queryItems = [URLQueryItem(name: "app_id", value: config.matrixAppId)]
-
-    guard let finalURL = components?.url else { return }
 
     do {
-      let response = try await httpClient.get(finalURL, query: [:], headers: [:])
-
-      if response.statusCode == 401 {
-        print("WakeFitAds: Unauthorized fetching remote config")
-        return
+      let response = try await httpClient.get(url, query: ["app_id": config.matrixAppId], headers: [:])
+      guard (200...299).contains(response.statusCode) else {
+        print("WakeFitAds: appconfig HTTP status \(response.statusCode)")
+        return false
       }
 
       let decoder = JSONDecoder()
-      let appConfig = try decoder.decode(WakeFitRemoteAppConfig.self, from: response.data)
+      var appConfig: WakeFitRemoteAppConfig?
 
-      self.remoteConfig = appConfig
+      // 1. Direct decode
+      if let decoded = try? decoder.decode(WakeFitRemoteAppConfig.self, from: response.data) {
+        appConfig = decoded
+      }
+
+      // 3. { "data": { ... } } wrapper
+      if appConfig == nil,
+         let wrapper = try? decoder.decode(WakeFitRemoteAppConfigWrapper.self, from: response.data),
+         let inner = wrapper.data {
+        appConfig = inner
+      }
+
+      guard let resolved = appConfig else {
+        print("WakeFitAds: appconfig decode failed")
+        return false
+      }
+
+      self.remoteConfig = resolved
       self.configLoaded = true
-
-      // Check show_ad flag
-      self.adsEnabled = (appConfig.showAd ?? 0) == 1
-      print("WakeFitAds: Remote config loaded, adsEnabled: \(self.adsEnabled)")
+      self.adsEnabled = (resolved.showAd ?? 0) == 1
+      print("WakeFitAds: appconfig loaded, adsEnabled: \(self.adsEnabled)")
+      return true
     } catch {
-      print("WakeFitAds: Failed to fetch remote config: \(error)")
+      print("WakeFitAds: Failed to fetch appconfig: \(error)")
+      return false
     }
   }
 
   // MARK: - Taku SDK
 
-  private func initializeTaku() async {
+  private func initializeTaku() async -> Bool {
     let config = WakeFitAdsConfig.shared.values
 
     #if canImport(AnyThinkSDK)
@@ -236,25 +484,30 @@ public final class WakeFitAdsManager: NSObject {
       )
       sdkInitialized = true
       print("WakeFitAds: Taku SDK initialized")
+      return true
     } catch {
       print("WakeFitAds: Taku SDK initialization failed: \(error)")
+      return false
     }
     #else
     print("WakeFitAds: AnyThinkSDK not linked")
+    return false
     #endif
   }
 
   // MARK: - Device Login
 
-  private func deviceLogin() async {
+  private func deviceLogin() async -> Bool {
     let config = WakeFitAdsConfig.shared.values
 
-    guard !config.apiBaseUrl.isEmpty else { return }
-    guard let baseURL = URL(string: config.apiBaseUrl) else { return }
+    guard !config.apiBaseUrl.isEmpty,
+          let baseURL = URL(string: config.apiBaseUrl) else {
+      return false
+    }
 
     let loginURL = baseURL.appendingPathComponent("api/user/login")
 
-    let appName = remoteConfig?.appName ?? config.appName
+    let appName = effectiveAppName
     let idfv = WakeFitSharedDeviceUUID.getUUID()
     let device = WakeFitSharedDeviceUUID.getDeviceModel()
 
@@ -267,25 +520,27 @@ public final class WakeFitAdsManager: NSObject {
 
     do {
       let response = try await httpClient.postForm(loginURL, fields: fields, headers: [:])
-
-      if response.statusCode == 401 {
-        print("WakeFitAds: Login unauthorized")
-        return
+      guard (200...299).contains(response.statusCode),
+            WakeFitBusinessResult.isSuccess(data: response.data) else {
+        print("WakeFitAds: Login not successful")
+        return false
       }
 
       let decoder = JSONDecoder()
       let loginResponse = try decoder.decode(WakeFitLoginResponse.self, from: response.data)
-
-      if loginResponse.code == 1, let data = loginResponse.data, let token = data.token {
-        self.token = token
-        self.httpClient.setToken(token)
-        self.loggedIn = true
-        print("WakeFitAds: Device logged in")
-      } else {
-        print("WakeFitAds: Login failed: \(loginResponse.message ?? "Unknown error")")
+      guard let data = loginResponse.data, let token = data.token, !token.isEmpty else {
+        print("WakeFitAds: Login response missing token")
+        return false
       }
+
+      self.token = token
+      self.httpClient.setToken(token)
+      self.loggedIn = true
+      print("WakeFitAds: Device logged in")
+      return true
     } catch {
       print("WakeFitAds: Login failed: \(error)")
+      return false
     }
   }
 
@@ -293,14 +548,8 @@ public final class WakeFitAdsManager: NSObject {
 
   private func preloadAds() {
     #if canImport(AnyThinkSDK)
-    let manager = ATAdManager.shared()
-
-    // Preload all ad formats
     if !bannerPlacementId.isEmpty {
       loadBanner(placementID: bannerPlacementId)
-    }
-    if !nativePlacementId.isEmpty {
-      loadNative(placementID: nativePlacementId)
     }
     if !interstitialPlacementId.isEmpty {
       loadInterstitial(placementID: interstitialPlacementId)
@@ -308,52 +557,60 @@ public final class WakeFitAdsManager: NSObject {
     if !rewardedPlacementId.isEmpty {
       loadRewarded(placementID: rewardedPlacementId)
     }
+    // Native is rendered on-demand by the view itself; preload is unnecessary
+    // and the Taku SDK will fetch when the view requests it.
     #endif
   }
 
   #if canImport(AnyThinkSDK)
   private func loadBanner(placementID: String) {
     guard !placementID.isEmpty else { return }
-    let extra: [String: Any] = [
+    var extra: [String: Any] = [
       kATAdLoadingExtraBannerAdSizeKey: NSValue(cgSize: CGSize(width: 320, height: 50)),
       kATExtraInfoAdSizeKey: NSValue(cgSize: CGSize(width: 320, height: 50))
     ]
-    ATAdManager.shared().loadAD(withPlacementID: placementID, extra: extra, delegate: self)
-  }
-
-  private func loadNative(placementID: String) {
-    guard !placementID.isEmpty else { return }
-    let extra: [String: Any] = [
-      kATExtraInfoNativeAdSizeKey: NSValue(cgSize: CGSize(width: 320, height: 180))
-    ]
+    if let vc = findViewController() {
+      extra[kATAdLoadingExtraShowViewControllerKey] = vc
+    }
     ATAdManager.shared().loadAD(withPlacementID: placementID, extra: extra, delegate: self)
   }
 
   private func loadInterstitial(placementID: String) {
     guard !placementID.isEmpty else { return }
-    ATAdManager.shared().loadAD(withPlacementID: placementID, extra: [:], delegate: self)
+    var extra: [String: Any] = [:]
+    if let vc = findViewController() {
+      extra[kATAdLoadingExtraShowViewControllerKey] = vc
+    }
+    ATAdManager.shared().loadAD(withPlacementID: placementID, extra: extra, delegate: self)
   }
 
   private func loadRewarded(placementID: String) {
     guard !placementID.isEmpty else { return }
-    ATAdManager.shared().loadAD(withPlacementID: placementID, extra: [:], delegate: self)
+    var extra: [String: Any] = [:]
+    if let vc = findViewController() {
+      extra[kATAdLoadingExtraShowViewControllerKey] = vc
+    }
+    ATAdManager.shared().loadAD(withPlacementID: placementID, extra: extra, delegate: self)
   }
   #endif
 
   // MARK: - Splash
 
   public func showSplashOnce() {
+    guard canPresentAds else {
+      print("WakeFitAds: Splash blocked, canPresentAds=false")
+      return
+    }
     guard !suppressed else {
       print("WakeFitAds: Splash suppressed")
       return
     }
-
     guard !splashShownInSession else {
       print("WakeFitAds: Splash already shown in this session")
       return
     }
-
-    guard !splashPlacementId.isEmpty else {
+    let placement = splashPlacementId
+    guard !placement.isEmpty else {
       print("WakeFitAds: No splash placement configured")
       return
     }
@@ -362,12 +619,11 @@ public final class WakeFitAdsManager: NSObject {
 
     #if canImport(AnyThinkSDK)
     let manager = ATAdManager.shared()
-
-    if manager.splashReady(forPlacementID: splashPlacementId) {
-      showSplashAd(placementID: splashPlacementId)
+    if manager.splashReady(forPlacementID: placement) {
+      showSplashAd(placementID: placement)
     } else {
-      pendingSplashPlacementID = splashPlacementId
-      manager.loadAD(withPlacementID: splashPlacementId, extra: [:], delegate: self, containerView: nil)
+      pendingSplashPlacementID = placement
+      manager.loadAD(withPlacementID: placement, extra: [:], delegate: self, containerView: nil)
     }
     #endif
   }
@@ -396,16 +652,8 @@ public final class WakeFitAdsManager: NSObject {
 
   public func startInterstitialLoop(sceneID: String) {
     stopInterstitialLoop()
-
     interstitialSceneID = sceneID
-    let interval = interstitialInterval
-
-    // Wait full interval before first interstitial
-    interstitialTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(interval), repeats: false) { [weak self] _ in
-      Task { @MainActor in
-        await self?.showInterstitialIfReady()
-      }
-    }
+    scheduleNextInterstitialCycle(initialWait: true)
   }
 
   public func stopInterstitialLoop() {
@@ -414,57 +662,107 @@ public final class WakeFitAdsManager: NSObject {
     interstitialSceneID = nil
   }
 
-  private func showInterstitialIfReady() async {
-    guard !suppressed, adsEnabled else { return }
-    guard !interstitialPlacementId.isEmpty else { return }
+  /// Always schedules the next cycle as long as the loop is still active.
+  /// Suppression, missing readiness, missing view controller, and show
+  /// failures must NOT permanently kill the loop — the next tick still runs.
+  private func scheduleNextInterstitialCycle(initialWait: Bool = false) {
+    guard interstitialSceneID != nil else { return }
+    let interval = max(1, interstitialInterval)
+
+    if initialWait {
+      // First interstitial appears after a full interval.
+      interstitialTimer?.invalidate()
+      interstitialTimer = Timer.scheduledTimer(
+        withTimeInterval: TimeInterval(interval),
+        repeats: false
+      ) { [weak self] _ in
+        Task { @MainActor in
+          await self?.handleInterstitialTick()
+        }
+      }
+      return
+    }
+
+    interstitialTimer?.invalidate()
+    interstitialTimer = Timer.scheduledTimer(
+      withTimeInterval: TimeInterval(interval),
+      repeats: false
+    ) { [weak self] _ in
+      Task { @MainActor in
+        await self?.handleInterstitialTick()
+      }
+    }
+  }
+
+  private func handleInterstitialTick() async {
+    // Make sure the loop is still active before we attempt anything.
+    guard interstitialSceneID != nil else { return }
+
+    defer {
+      // Whatever happened this tick, the loop keeps going until
+      // stopInterstitialLoop explicitly clears the sceneID.
+      if interstitialSceneID != nil {
+        scheduleNextInterstitialCycle(initialWait: false)
+      }
+    }
+
+    guard canPresentAds else { return }
+    guard !suppressed else { return }
+
+    let placement = interstitialPlacementId
+    guard !placement.isEmpty else { return }
 
     #if canImport(AnyThinkSDK)
     let manager = ATAdManager.shared()
-
-    if manager.interstitialReady(forPlacementID: interstitialPlacementId) {
-      guard let sceneID = interstitialSceneID,
-            let viewController = topViewController() else { return }
-
-      manager.entryInterstitialScenario(withPlacementID: interstitialPlacementId, scene: sceneID)
-      manager.showInterstitial(withPlacementID: interstitialPlacementId, scene: sceneID, in: viewController, delegate: self)
-    } else {
-      // Reload and skip this cycle
-      loadInterstitial(placementID: interstitialPlacementId)
+    guard manager.interstitialReady(forPlacementID: placement) else {
+      // Not ready this tick — reload for next time, but still keep cycling.
+      loadInterstitial(placementID: placement)
+      return
     }
+
+    guard let sceneID = interstitialSceneID,
+          let viewController = topViewController() else { return }
+
+    manager.entryInterstitialScenario(withPlacementID: placement, scene: sceneID)
+    manager.showInterstitial(
+      withPlacementID: placement,
+      scene: sceneID,
+      in: viewController,
+      delegate: self
+    )
     #endif
-
-    // Schedule next interstitial
-    let sceneID = interstitialSceneID
-    interstitialTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(interstitialInterval), repeats: false) { [weak self] _ in
-      Task { @MainActor in
-        await self?.showInterstitialIfReady()
-      }
-    }
   }
 
   // MARK: - Rewarded
 
   public func showRewarded(sceneID: String) async -> Bool {
-    guard !suppressed, adsEnabled else {
-      print("WakeFitAds: Rewarded suppressed or disabled")
+    guard canPresentAds else {
+      print("WakeFitAds: Rewarded blocked, canPresentAds=false")
+      return false
+    }
+    guard !suppressed else {
+      print("WakeFitAds: Rewarded suppressed")
+      return false
+    }
+    guard pendingRewardedContinuation == nil else {
+      print("WakeFitAds: Rewarded request already in flight")
       return false
     }
 
-    guard !rewardedPlacementId.isEmpty else {
-      print("WakeFitAds: No rewarded placement configured")
-      return false
-    }
-
-    // Check cooldown
     if let cooldownEnd = rewardCooldownEndTime, Date() < cooldownEnd {
       print("WakeFitAds: Rewarded in cooldown")
       return false
     }
 
+    let placement = rewardedPlacementId
+    guard !placement.isEmpty else {
+      print("WakeFitAds: No rewarded placement configured")
+      return false
+    }
+
     #if canImport(AnyThinkSDK)
     let manager = ATAdManager.shared()
-
-    if !manager.rewardedVideoReady(forPlacementID: rewardedPlacementId) {
+    guard manager.rewardedVideoReady(forPlacementID: placement) else {
       print("WakeFitAds: Rewarded not ready")
       return false
     }
@@ -474,14 +772,19 @@ public final class WakeFitAdsManager: NSObject {
       return false
     }
 
-    return await withCheckedContinuation { continuation in
-      // Store continuation for delegate callback
-      // Note: In production, this would need proper continuation management
-      manager.entryRewardedVideoScenario(withPlacementID: rewardedPlacementId, scene: sceneID)
-      manager.showRewardedVideo(withPlacementID: rewardedPlacementId, scene: sceneID, in: viewController, delegate: self)
+    pendingRewardedHasSuccess = false
+    pendingRewardedPlacement = placement
+    pendingRewardedSceneID = sceneID
 
-      // For now, return false as we need proper async handling
-      continuation.resume(returning: false)
+    return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+      self.pendingRewardedContinuation = continuation
+      manager.entryRewardedVideoScenario(withPlacementID: placement, scene: sceneID)
+      manager.showRewardedVideo(
+        withPlacementID: placement,
+        scene: sceneID,
+        in: viewController,
+        delegate: self
+      )
     }
     #else
     return false
@@ -494,11 +797,146 @@ public final class WakeFitAdsManager: NSObject {
     return max(0, Int(remaining))
   }
 
+  /// Resolves any in-flight rewarded continuation as `false`. Used when the
+  /// ad fails to play so the JS Promise never hangs.
+  private func resolvePendingRewarded(_ result: Bool) {
+    let continuation = pendingRewardedContinuation
+    pendingRewardedContinuation = nil
+    pendingRewardedPlacement = nil
+    pendingRewardedSceneID = nil
+    pendingRewardedHasSuccess = false
+    continuation?.resume(returning: result)
+  }
+
+  // MARK: - Reward Backend Chain
+
+  /// Strict order: reportads -> reportask -> cooldown -> resolve(true).
+  /// No `/api/user/reportreward`. No coins. No红包. No fire-and-forget.
+  /// Returns true only if BOTH backend calls succeed.
+  private func completeRewardBackendChain() async -> Bool {
+    let adsOK = await performAuthorizedBackendCall(
+      path: "/api/user/reportads",
+      body: ["adtype": "rewardedvideo"],
+      useJSON: true
+    )
+    guard adsOK else {
+      print("WakeFitAds: Reward chain stopped: reportads failed")
+      return false
+    }
+
+    let askOK = await performAuthorizedBackendCall(
+      path: "/api/user/reportask",
+      body: [:],
+      useJSON: true
+    )
+    guard askOK else {
+      print("WakeFitAds: Reward chain stopped: reportask failed")
+      return false
+    }
+    return true
+  }
+
+  // MARK: - Authorized Backend Helper
+
+  /// Performs a single authorized backend call. On HTTP 401 or business 401,
+  /// clears token + relogin and retries **exactly once**.
+  ///
+  /// Returns true only if HTTP is 2xx AND business code == 1.
+  private func performAuthorizedBackendCall(
+    path: String,
+    body: [String: Any],
+    useJSON: Bool
+  ) async -> Bool {
+    let firstResult = await performAuthorizedBackendAttempt(path: path, body: body, useJSON: useJSON)
+    switch firstResult {
+    case .success:
+      return true
+    case .unauthorized:
+      let reLoggedIn = await clearAuthAndRelogin()
+      guard reLoggedIn else { return false }
+      let secondResult = await performAuthorizedBackendAttempt(path: path, body: body, useJSON: useJSON)
+      switch secondResult {
+      case .success:
+        return true
+      case .unauthorized, .failed:
+        return false
+      }
+    case .failed:
+      return false
+    }
+  }
+
+  private enum AuthorizedAttemptResult {
+    case success
+    case unauthorized
+    case failed
+  }
+
+  private func performAuthorizedBackendAttempt(
+    path: String,
+    body: [String: Any],
+    useJSON: Bool
+  ) async -> AuthorizedAttemptResult {
+    guard !WakeFitAdsConfig.shared.values.apiBaseUrl.isEmpty,
+          let baseURL = URL(string: WakeFitAdsConfig.shared.values.apiBaseUrl) else {
+      return .failed
+    }
+    let url = baseURL.appendingPathComponent(path)
+    let headers: [String: String] = [:]
+
+    do {
+      let response: WakeFitHTTPResponse
+      if useJSON {
+        response = try await httpClient.post(url, json: body, headers: headers)
+      } else {
+        let fields = body.reduce(into: [String: String]()) { acc, pair in
+          acc[pair.key] = String(describing: pair.value)
+        }
+        response = try await httpClient.postForm(url, fields: fields, headers: headers)
+      }
+
+      // HTTP 401 -> relogin path
+      if response.statusCode == 401 {
+        return .unauthorized
+      }
+
+      guard (200...299).contains(response.statusCode) else {
+        return .failed
+      }
+
+      // Business 401 -> relogin path
+      if WakeFitBusinessResult.isUnauthorized(data: response.data) {
+        return .unauthorized
+      }
+
+      // Business 1 -> success
+      if WakeFitBusinessResult.isSuccess(data: response.data) {
+        return .success
+      }
+
+      return .failed
+    } catch {
+      print("WakeFitAds: authorized backend call failed: \(error)")
+      return .failed
+    }
+  }
+
+  /// Clears auth state and re-runs `deviceLogin()`. Returns true only if
+  /// the new login was a business success with a usable token.
+  private func clearAuthAndRelogin() async -> Bool {
+    self.token = nil
+    self.httpClient.setToken(nil)
+    self.loggedIn = false
+    return await deviceLogin()
+  }
+
   // MARK: - Suppression
 
   public func setSuppressed(_ value: Bool) {
+    if suppressed == value { return }
     suppressed = value
     print("WakeFitAds: Suppressed set to \(value)")
+    notifyStateChanged()
   }
 
   // MARK: - Status
@@ -510,8 +948,15 @@ public final class WakeFitAdsManager: NSObject {
       "suppressed": suppressed,
       "configLoaded": configLoaded,
       "sdkInitialized": sdkInitialized,
-      "loggedIn": loggedIn
+      "loggedIn": loggedIn,
+      "canPresentAds": canPresentAds
     ]
+  }
+
+  // MARK: - Notifications
+
+  private func notifyStateChanged() {
+    NotificationCenter.default.post(name: .wakeFitAdsStateChanged, object: self)
   }
 
   // MARK: - Helpers
@@ -529,58 +974,155 @@ public final class WakeFitAdsManager: NSObject {
     return topController
   }
 
+  private func findViewController() -> UIViewController? {
+    return topViewController()
+  }
+
   // MARK: - Revenue Reporting
 
+  /// Single revenue implementation. Used by `didRevenue(forPlacementID:extra:)`.
   private func reportRevenue(placementID: String, extra: [AnyHashable: Any]) {
-    guard let config = URL(string: WakeFitAdsConfig.shared.values.apiBaseUrl + "/api/user/reportrevenue") else { return }
+    var payload = normalizeRevenueExtra(extra)
+    payload["placementID"] = placementID
+    payload["idfv"] = WakeFitSharedDeviceUUID.getUUID()
+    payload["app_name"] = effectiveAppName
 
-    var payload: [String: Any] = [
-      "placementID": placementID,
-      "idfv": WakeFitSharedDeviceUUID.getUUID(),
-      "appName": remoteConfig?.appName ?? WakeFitAdsConfig.shared.values.appName
-    ]
+    let isLoggedIn = loggedIn && !(token?.isEmpty ?? true)
 
-    // Add revenue data from extra
-    for (key, value) in extra {
-      if let stringKey = key as? String {
-        payload[stringKey] = value
-      }
-    }
-
-    Task {
-      if let token = token, !token.isEmpty {
-        var headers = ["Authorization": "Bearer \(token)"]
-        _ = try? await httpClient.post(config, json: payload, headers: headers)
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      if isLoggedIn {
+        let success = await self.performAuthorizedBackendCall(
+          path: "/api/user/reportrevenue",
+          body: payload,
+          useJSON: true
+        )
+        if !success {
+          print("WakeFitAds: Revenue report (logged-in) failed for \(placementID)")
+        }
       } else {
-        _ = try? await httpClient.post(config, json: payload, headers: [:])
+        let success = await self.performUnauthorizedBackendCall(
+          path: "/api/user/prerevenuerecord",
+          body: payload
+        )
+        if !success {
+          print("WakeFitAds: Revenue report (pre-login) failed for \(placementID)")
+        }
       }
     }
   }
 
-  // MARK: - Report Ads Watched
-
-  public func reportAdsWatched(adtype: String) {
-    guard let config = URL(string: WakeFitAdsConfig.shared.values.apiBaseUrl + "/api/user/reportads") else { return }
-
-    let fields: [String: String] = ["adtype": adtype]
-
-    Task {
-      if let token = token, !token.isEmpty {
-        var headers = ["Authorization": "Bearer \(token)"]
-        _ = try? await httpClient.postForm(config, fields: fields, headers: headers)
+  /// Pre-login backend call without Authorization. Best-effort only.
+  private func performUnauthorizedBackendCall(
+    path: String,
+    body: [String: Any]
+  ) async -> Bool {
+    guard !WakeFitAdsConfig.shared.values.apiBaseUrl.isEmpty,
+          let baseURL = URL(string: WakeFitAdsConfig.shared.values.apiBaseUrl) else {
+      return false
+    }
+    let url = baseURL.appendingPathComponent(path)
+    do {
+      let response = try await httpClient.post(url, json: body, headers: [:])
+      guard (200...299).contains(response.statusCode) else {
+        return false
       }
+      // Some pre-login endpoints return business code; if present, verify.
+      if response.data.isEmpty { return true }
+      if let json = try? JSONSerialization.jsonObject(with: response.data) as? [String: Any],
+         json["code"] != nil {
+        return WakeFitBusinessResult.isSuccess(data: response.data)
+      }
+      return true
+    } catch {
+      print("WakeFitAds: pre-login backend call failed: \(error)")
+      return false
     }
   }
 
-  public func reportAsk() {
-    guard let config = URL(string: WakeFitAdsConfig.shared.values.apiBaseUrl + "/api/user/reportask") else { return }
-
-    Task {
-      if let token = token, !token.isEmpty {
-        var headers = ["Authorization": "Bearer \(token)"]
-        _ = try? await httpClient.post(config, json: [:], headers: headers)
-      }
+  /// JSON-safe normalization of Taku extra payload, matching the legacy
+  /// reporter behavior so backend schemas stay stable.
+  private func normalizeRevenueExtra(_ extra: [AnyHashable: Any]) -> [String: Any] {
+    let formatter = ISO8601DateFormatter()
+    return extra.reduce(into: [String: Any]()) { result, pair in
+      let key = (pair.key as? String) ?? String(describing: pair.key)
+      result[key] = jsonSafeValue(pair.value, formatter: formatter)
     }
+  }
+
+  private func jsonSafeValue(_ value: Any, formatter: ISO8601DateFormatter) -> Any {
+    switch value {
+    case is NSNull:
+      return NSNull()
+    case let value as String:
+      return value
+    case let value as Bool:
+      return value
+    case let value as Int:
+      return value
+    case let value as Int8:
+      return Int(value)
+    case let value as Int16:
+      return Int(value)
+    case let value as Int32:
+      return Int(value)
+    case let value as Int64:
+      return value
+    case let value as UInt:
+      return value <= UInt(Int64.max) ? Int64(value) : String(value)
+    case let value as UInt8:
+      return Int(value)
+    case let value as UInt16:
+      return Int(value)
+    case let value as UInt32:
+      return Int64(value)
+    case let value as UInt64:
+      return value <= UInt64(Int64.max) ? Int64(value) : String(value)
+    case let value as Float:
+      return value.isFinite ? Double(value) : String(value)
+    case let value as Double:
+      return value.isFinite ? value : String(value)
+    case let value as NSNumber:
+      return value
+    case let value as Date:
+      return formatter.string(from: value)
+    case let value as URL:
+      return value.absoluteString
+    case let value as [AnyHashable: Any]:
+      return normalizeRevenueExtra(value)
+    case let value as [String: Any]:
+      return normalizeRevenueExtra(value.reduce(into: [AnyHashable: Any]()) { $0[$1.key] = $1.value })
+    case let value as [Any]:
+      return value.map { jsonSafeValue($0, formatter: formatter) }
+    default:
+      return String(describing: value)
+    }
+  }
+}
+
+// MARK: - appconfig wrapper decoder
+
+/// Decodes the `{ "data": { ...config... } }` wrapper form. The `data` key
+/// is optional because some responses ship the config at the top level and
+/// only wrap it on certain accounts.
+private struct WakeFitRemoteAppConfigWrapper: Decodable {
+  let data: WakeFitRemoteAppConfig?
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: DynamicKey.self)
+    if container.contains(.data) {
+      self.data = try? container.decode(WakeFitRemoteAppConfig.self, forKey: .data)
+    } else {
+      self.data = nil
+    }
+  }
+
+  private struct DynamicKey: CodingKey {
+    var stringValue: String
+    init?(stringValue: String) { self.stringValue = stringValue }
+    var intValue: Int? { nil }
+    init?(intValue: Int) { return nil }
+    static let data = DynamicKey(stringValue: "data")!
   }
 }
 
@@ -593,7 +1135,9 @@ extension WakeFitAdsManager: ATAdLoadingDelegate {
 
     if placementID == pendingSplashPlacementID {
       pendingSplashPlacementID = nil
-      showSplashAd(placementID: placementID)
+      if canPresentAds && !suppressed {
+        showSplashAd(placementID: placementID)
+      }
     }
   }
 
@@ -619,7 +1163,6 @@ extension WakeFitAdsManager: ATInterstitialDelegate {
 
   public func interstitialDidClose(forPlacementID placementID: String, extra: [AnyHashable: Any]) {
     print("WakeFitAds: Interstitial closed: \(placementID)")
-    // Reload for next cycle
     loadInterstitial(placementID: placementID)
   }
 
@@ -639,19 +1182,57 @@ extension WakeFitAdsManager: ATRewardedVideoDelegate {
   public func rewardedVideoDidClick(forPlacementID placementID: String, extra: [AnyHashable: Any]) {}
 
   public func rewardedVideoDidRewardSuccess(forPlacemenID placementID: String, extra: [AnyHashable: Any]) {
-    print("WakeFitAds: Reward success for: \(placementID)")
+    print("WakeFitAds: Reward callback fired for: \(placementID)")
+    // Record callback only; do not start cooldown, do not call reportads/reportask,
+    // do not resolve the continuation. Final reward decision happens in close.
+    if placementID == pendingRewardedPlacement {
+      pendingRewardedHasSuccess = true
+    }
+  }
 
-    // Set cooldown
-    rewardCooldownEndTime = Date().addingTimeInterval(TimeInterval(rewardInterval))
-
-    // Report watched
-    reportAdsWatched(adtype: "rewardedvideo")
-    reportAsk()
+  public func rewardedVideoDidFail(toPlay placementID: String, error: Error, extra: [AnyHashable: Any]) {
+    print("WakeFitAds: Rewarded failed to play: \(error)")
+    guard placementID == pendingRewardedPlacement else { return }
+    resolvePendingRewarded(false)
+    loadRewarded(placementID: placementID)
   }
 
   public func rewardedVideoDidClose(forPlacementID placementID: String, rewarded: Bool, extra: [AnyHashable: Any]) {
     print("WakeFitAds: Rewarded closed: \(placementID), rewarded: \(rewarded)")
-    loadRewarded(placementID: placementID)
+    guard placementID == pendingRewardedPlacement else {
+      loadRewarded(placementID: placementID)
+      return
+    }
+
+    let trulyRewarded = rewarded && pendingRewardedHasSuccess
+    let continuation = pendingRewardedContinuation
+    let placement = pendingRewardedPlacement
+
+    // Clear pending state eagerly so reload can fire immediately.
+    pendingRewardedContinuation = nil
+    pendingRewardedPlacement = nil
+    pendingRewardedSceneID = nil
+    pendingRewardedHasSuccess = false
+
+    if !trulyRewarded {
+      continuation?.resume(returning: false)
+      if let placement { loadRewarded(placementID: placement) }
+      return
+    }
+
+    // Genuine reward success path.
+    Task { @MainActor [weak self] in
+      guard let self else {
+        continuation?.resume(returning: false)
+        return
+      }
+      let success = await self.completeRewardBackendChain()
+      if success {
+        self.rewardCooldownEndTime = Date().addingTimeInterval(TimeInterval(self.rewardInterval))
+      }
+      continuation?.resume(returning: success)
+      if let placement { self.loadRewarded(placementID: placement) }
+    }
   }
 }
 
