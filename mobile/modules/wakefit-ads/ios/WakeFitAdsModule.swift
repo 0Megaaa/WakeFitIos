@@ -92,17 +92,12 @@ public class WakeFitAdsAdView: ExpoView,
   private var nativeAdView: UIView?
   private var isLoaded = false
 
-  let onAvailabilityChange = EventDispatcher("onAvailabilityChange")
-  let onAdError = EventDispatcher("onAdError")
+  let onAvailabilityChange = EventDispatcher()
+  let onAdError = EventDispatcher()
 
   public required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
     clipsToBounds = true
-  }
-
-  public override func viewDidLoad() {
-    super.viewDidLoad()
-    updateAd()
   }
 
   private func updateAd() {
@@ -179,9 +174,9 @@ public class WakeFitAdsAdView: ExpoView,
       guard let self else { return }
       self.clearAd()
 
-      bannerView.frame = self.view.bounds
+      bannerView.frame = self.bounds
       bannerView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-      self.view.addSubview(bannerView)
+      self.addSubview(bannerView)
       self.bannerView = bannerView
 
       self.isLoaded = true
@@ -191,8 +186,8 @@ public class WakeFitAdsAdView: ExpoView,
 
   private func loadAndRenderBanner(placementID: String) {
     let extra: [String: Any] = [
-      kATAdLoadingExtraBannerAdSizeKey: NSValue(cgSize: CGSize(width: view.bounds.width > 0 ? view.bounds.width : 320, height: 50)),
-      kATExtraInfoAdSizeKey: NSValue(cgSize: CGSize(width: view.bounds.width > 0 ? view.bounds.width : 320, height: 50))
+      kATAdLoadingExtraBannerAdSizeKey: NSValue(cgSize: CGSize(width: bounds.width > 0 ? bounds.width : 320, height: 50)),
+      kATExtraInfoAdSizeKey: NSValue(cgSize: CGSize(width: bounds.width > 0 ? bounds.width : 320, height: 50))
     ]
 
     ATAdManager.shared().loadAD(withPlacementID: placementID, extra: extra, delegate: self)
@@ -205,8 +200,8 @@ public class WakeFitAdsAdView: ExpoView,
     }
 
     let configuration = ATNativeADConfiguration()
-    configuration.adFrame = view.bounds
-    configuration.mediaViewFrame = view.bounds
+    configuration.adFrame = bounds
+    configuration.mediaViewFrame = bounds
     configuration.rootViewController = findViewController()
     configuration.delegate = self
     configuration.sizeToFit = true
@@ -222,9 +217,9 @@ public class WakeFitAdsAdView: ExpoView,
       guard let self else { return }
       self.clearAd()
 
-      nativeView.frame = self.view.bounds
+      nativeView.frame = self.bounds
       nativeView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-      self.view.addSubview(nativeView)
+      self.addSubview(nativeView)
       self.nativeAdView = nativeView
 
       self.isLoaded = true
@@ -234,7 +229,7 @@ public class WakeFitAdsAdView: ExpoView,
 
   private func loadAndRenderNative(placementID: String) {
     let extra: [String: Any] = [
-      kATExtraInfoNativeAdSizeKey: NSValue(cgSize: CGSize(width: view.bounds.width > 0 ? view.bounds.width : 320, height: 180))
+      kATExtraInfoNativeAdSizeKey: NSValue(cgSize: CGSize(width: bounds.width > 0 ? bounds.width : 320, height: 180))
     ]
 
     ATAdManager.shared().loadAD(withPlacementID: placementID, extra: extra, delegate: self)
@@ -278,18 +273,38 @@ public class WakeFitAdsAdView: ExpoView,
     super.layoutSubviews()
 
     // Resize ad views when view size changes
-    bannerView?.frame = view.bounds
-    nativeAdView?.frame = view.bounds
+    bannerView?.frame = bounds
+    nativeAdView?.frame = bounds
   }
 }
 
 #if canImport(AnyThinkSDK)
 extension WakeFitAdsAdView: ATBannerDelegate {
-  public func bannerView(_ bannerView: ATBannerView, didClickWithPlacementID placementID: String, extra: [AnyHashable: Any]) {}
+  public func bannerView(
+    _ bannerView: ATBannerView,
+    didShowAdWithPlacementID placementID: String,
+    extra: [AnyHashable: Any]
+  ) {}
+
+  public func bannerView(
+    _ bannerView: ATBannerView,
+    didClickWithPlacementID placementID: String,
+    extra: [AnyHashable: Any]
+  ) {}
 }
 
 extension WakeFitAdsAdView: ATNativeADDelegate {
-  public func didClickNativeAd(in adView: ATNativeADView, placementID: String, extra: [AnyHashable: Any]) {}
+  public func didShowNativeAd(
+    in adView: ATNativeADView,
+    placementID: String,
+    extra: [AnyHashable: Any]
+  ) {}
+
+  public func didClickNativeAd(
+    in adView: ATNativeADView,
+    placementID: String,
+    extra: [AnyHashable: Any]
+  ) {}
 }
 
 extension WakeFitAdsAdView: ATAdLoadingDelegate {

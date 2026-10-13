@@ -65,6 +65,10 @@ keystore.properties
 !config/ads.example.json
 config/ads.local.json
 
+# wakefit-ads local Expo module metadata (must be tracked despite global *.json ignore)
+!modules/wakefit-ads/package.json
+!modules/wakefit-ads/expo-module.config.json
+
 # Android local environment
 **/local.properties
 

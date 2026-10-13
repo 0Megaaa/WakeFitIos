@@ -1,0 +1,7 @@
+{
+  "platforms": ["ios"],
+  "ios": {
+    "modules": ["WakeFitAdsModule"],
+    "podspecPath": "ios/WakeFitAds.podspec"
+  }
+}
