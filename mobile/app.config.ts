@@ -51,7 +51,8 @@ function loadAdsLocalConfig(projectRoot: string): AdsLocalConfig {
     const localConfig: AdsLocalConfig = JSON.parse(raw);
     return {
       apiBaseUrl: localConfig.apiBaseUrl || DEFAULT_ADS_CONFIG.apiBaseUrl,
-      matrixAppId: localConfig.matrixAppId || '',
+      matrixAppId:
+        localConfig.matrixAppId || DEFAULT_ADS_CONFIG.matrixAppId,
       appName: localConfig.appName || DEFAULT_ADS_CONFIG.appName,
       takuAppId: localConfig.takuAppId || '',
       takuAppKey: localConfig.takuAppKey || '',
