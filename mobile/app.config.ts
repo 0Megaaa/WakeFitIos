@@ -23,7 +23,7 @@ export interface AdsLocalConfig {
 
 const DEFAULT_ADS_CONFIG: AdsLocalConfig = {
   apiBaseUrl: 'https://yx.youtoball.com/adlj',
-  matrixAppId: '',
+  matrixAppId: '38',
   appName: 'WakeFit',
   takuAppId: '',
   takuAppKey: '',
