@@ -21,11 +21,12 @@ export type HomeTabProps = {
   state: WakeFitControllerState;
   actions: WakeFitControllerActions;
   isDebugToolsEnabled: boolean;
+  adsReady: boolean;
   rewardCooldown: number;
   onRewardedPress: () => void;
 };
 
-export function HomeTab({ state, actions, isDebugToolsEnabled, rewardCooldown, onRewardedPress }: HomeTabProps) {
+export function HomeTab({ state, actions, isDebugToolsEnabled, adsReady, rewardCooldown, onRewardedPress }: HomeTabProps) {
   const challengeStatus = state.snapshot?.status ?? 'idle';
   const activeExerciseLabel = getExerciseLabel(state.snapshot?.exerciseType ?? state.alarm.exerciseType);
   const progressPercent = state.snapshot
@@ -49,7 +50,7 @@ export function HomeTab({ state, actions, isDebugToolsEnabled, rewardCooldown, o
       </View>
 
       {/* Banner Ad */}
-      {Platform.OS === 'ios' && (
+      {Platform.OS === 'ios' && adsReady && (
         <Section title="广告">
           <View style={wakeFitStyles.bannerAdContainer}>
             <WakeFitAdView
@@ -77,7 +78,7 @@ export function HomeTab({ state, actions, isDebugToolsEnabled, rewardCooldown, o
       </Section>
 
       {/* Native Ad */}
-      {Platform.OS === 'ios' && (
+      {Platform.OS === 'ios' && adsReady && (
         <Section title="推荐">
           <View style={wakeFitStyles.nativeAdContainer}>
             <WakeFitAdView
@@ -160,7 +161,7 @@ export function HomeTab({ state, actions, isDebugToolsEnabled, rewardCooldown, o
       </Section>
 
       {/* Rewarded Ad Section */}
-      {Platform.OS === 'ios' && (
+      {Platform.OS === 'ios' && adsReady && (
         <Section title="支持 WakeFit">
           <View style={wakeFitStyles.rewardedSection}>
             <AppButton

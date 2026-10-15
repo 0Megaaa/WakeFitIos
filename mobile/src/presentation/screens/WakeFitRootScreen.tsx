@@ -141,6 +141,7 @@ export function WakeFitRootScreen({ dependencies, isDebugToolsEnabled = defaultD
               state={state}
               actions={actions}
               isDebugToolsEnabled={isDebugToolsEnabled}
+              adsReady={adsReady}
               rewardCooldown={rewardCooldown}
               onRewardedPress={handleRewardedPress}
             />
